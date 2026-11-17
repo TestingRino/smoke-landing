@@ -30,7 +30,7 @@ bind() {
   local i
   for i in 1 2 3 4 5 6 7 8; do
     "$@" >/dev/null 2>&1 && return 0
-    echo "  waiting for new service account to propagate (attempt $i)..."; sleep $((i * 5))
+    echo "  waiting for new IAM resources to propagate (attempt $i)..."; sleep $((i * 5))
   done
   "$@" >/dev/null   # final attempt shows the real error
 }
@@ -49,8 +49,8 @@ gcloud iam workload-identity-pools providers describe "$PROVIDER" "${G[@]}" --lo
     --issuer-uri "https://token.actions.githubusercontent.com" \
     --attribute-mapping "google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref" \
     --attribute-condition "assertion.repository == '$GH_OWNER/$CTRL' && assertion.ref == 'refs/heads/main'"
-gcloud iam service-accounts add-iam-policy-binding "$SA" "${G[@]}" --role roles/iam.workloadIdentityUser \
-  --member "principalSet://iam.googleapis.com/projects/$NUM/locations/global/workloadIdentityPools/$POOL/attribute.repository/$GH_OWNER/$CTRL" >/dev/null
+bind gcloud iam service-accounts add-iam-policy-binding "$SA" "${G[@]}" --role roles/iam.workloadIdentityUser \
+  --member "principalSet://iam.googleapis.com/projects/$NUM/locations/global/workloadIdentityPools/$POOL/attribute.repository/$GH_OWNER/$CTRL"
 
 cat <<EOF
 
