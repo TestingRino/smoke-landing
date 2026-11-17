@@ -1,0 +1,32 @@
+name: smoke-teardown
+run-name: "teardown: ${{ inputs.repo || 'expired (janitor)' }}"
+on:
+  schedule:
+    - cron: "17 6 * * *"   # daily janitor: removes apps idle longer than TTL_DAYS
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "App repo to tear down (blank = only expired apps)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  teardown:
+    runs-on: [self-hosted, devsecops-gate]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load config
+        run: grep -E '^[A-Z_]+=' smoke.config.env | sed -E 's/"//g; s/\s+#.*$//' >> "$GITHUB_ENV"
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOYER_SA }}
+      - run: scripts/teardown.sh "${INPUT_REPO:---expired}"
+        env:
+          INPUT_REPO: ${{ inputs.repo }}

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# smokectl: operator CLI (run from your laptop; needs `gh auth login`, optionally gcloud).
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=../smoke.config.env
+source "$ROOT/smoke.config.env"
+CTRL="$OWNER/$CONTROL_REPO_NAME"
+
+usage() {
+  cat <<EOF
+smokectl <command> [args]
+
+  enable  <repo>          opt a repo in (adds topic '$OPT_IN_TOPIC'; poller deploys every new default-branch commit)
+  disable <repo>          opt a repo out (removes topic; does not tear down)
+  deploy  <repo> [ref]    run gate + deploy now (ref = branch/tag/sha; default branch if omitted)
+  teardown <repo>         delete the Cloud Run service, its GCP secrets, runtime SA and images
+  runs    [repo]          recent pipeline runs
+  status                  live smoke apps and URLs (needs gcloud)
+  secrets <repo>          where to put this app's API keys/credentials in Infisical
+EOF
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  enable)   gh repo edit "$OWNER/${1:?repo}" --add-topic "$OPT_IN_TOPIC" && echo "enabled; deploys on next poll (≤30 min) or run: smokectl deploy $1" ;;
+  disable)  gh repo edit "$OWNER/${1:?repo}" --remove-topic "$OPT_IN_TOPIC" ;;
+  deploy)   gh workflow run deploy.yml -R "$CTRL" -f repo="${1:?repo}" -f ref="${2:-}" && echo "dispatched; watch: gh run watch -R $CTRL" ;;
+  teardown) gh workflow run teardown.yml -R "$CTRL" -f repo="${1:?repo}" ;;
+  runs)     if [[ -n "${1:-}" ]]; then gh run list -R "$CTRL" -w deploy.yml -L 50 | grep -F "smoke: $1 " || true
+            else gh run list -R "$CTRL" -w deploy.yml -L 20; fi ;;
+  status)   gcloud run services list --project "$GCP_PROJECT" --region "$GCP_REGION" \
+              --filter="metadata.labels.managed-by=smoke-landing" \
+              --format="table(metadata.name, metadata.labels.commit, status.url, metadata.labels.deployed-at.date(tz=LOCAL))" ;;
+  secrets)  r="${1:?repo}"; p="/$(echo "$r" | sed -E 's/[^A-Za-z0-9_-]/-/g')"
+            cat <<EOF
+Infisical UI: $INFISICAL_UI_URL   (ssh -L 8080:localhost:8080 <vm>)
+  Project:     $INFISICAL_PROJECT_ID
+  Environment: $INFISICAL_ENV
+  Folder:      $p          <- create it and add KEY=value pairs (env-var style names)
+Shared keys (e.g. one OPENAI_API_KEY for many apps): put them in /_shared and add a
+"secret import" of /_shared into $p.  Changes apply on the next deploy: smokectl deploy $r
+EOF
+            ;;
+  *) usage; [[ -z "$cmd" ]] || exit 1 ;;
+esac

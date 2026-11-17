@@ -1,0 +1,34 @@
+# Self-hosted Infisical: the secrets manager for every smoke app.
+# Bound to 127.0.0.1 ONLY: build containers on this VM cannot reach it, and it isn't on the internet.
+# Reach the UI with:  ssh -L 8080:localhost:8080 <vm>   then open http://localhost:8080
+name: infisical
+services:
+  backend:
+    image: infisical/infisical:${INFISICAL_VERSION}
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes: [redis_data:/data]
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env
+    volumes: [pg_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  pg_data:
+  redis_data:

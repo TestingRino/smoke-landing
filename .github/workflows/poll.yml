@@ -1,0 +1,23 @@
+name: smoke-poll
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: write   # to dispatch deploy.yml
+
+concurrency:
+  group: smoke-poll
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: [self-hosted, devsecops-gate]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/poll.sh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

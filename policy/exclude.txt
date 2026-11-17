@@ -1,0 +1,2 @@
+# Repo names the poller must never auto-deploy (one per line). Manual dispatch still works.
+smoke-landing

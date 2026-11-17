@@ -1,0 +1,13 @@
+# Optional: drop this at the root of an app repo. Every field is optional.
+port: 8080              # port the app listens on (Cloud Run also sets $PORT)
+health_path: /healthz   # smoke check expects 2xx/3xx here (default "/")
+memory: 512Mi
+cpu: 1
+max_instances: 1        # capped by MAX_INSTANCES_CAP in policy/gate.env
+# dockerfile: Dockerfile   # default; if absent, Google buildpacks auto-detect Node/Python
+# context: .
+# entrypoint: "gunicorn -b :$PORT app:app"   # buildpacks only (Python usually needs this)
+zap: true               # post-deploy OWASP ZAP baseline scan
+env:                    # NON-secret config only. Secrets go in Infisical, never here.
+  NODE_ENV: production
+  LOG_LEVEL: info

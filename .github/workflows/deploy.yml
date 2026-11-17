@@ -1,0 +1,128 @@
+name: smoke-deploy
+run-name: "smoke: ${{ inputs.repo }} @ ${{ inputs.ref || 'default branch' }}"
+
+# Only workflow_dispatch: no pull_request triggers, so fork PRs can never reach the self-hosted runner.
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "App repository name (under the configured OWNER)"
+        required: true
+        type: string
+      ref:
+        description: "Branch, tag or commit SHA (blank = default branch)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write   # GitHub OIDC -> GCP Workload Identity Federation (no GCP keys stored anywhere)
+
+concurrency:
+  group: smoke-${{ inputs.repo }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: DevSecOps gate
+    runs-on: [self-hosted, devsecops-gate]
+    timeout-minutes: 45
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      config: ${{ steps.resolve.outputs.config }}
+      digest: ${{ steps.push.outputs.digest }}
+    env:
+      REPO: ${{ inputs.repo }}
+      REF: ${{ inputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load config
+        run: grep -E '^[A-Z_]+=' smoke.config.env | sed -E 's/"//g; s/\s+#.*$//' >> "$GITHUB_ENV"
+      - name: Resolve & clone app
+        id: resolve
+        run: scripts/resolve.sh
+      - name: Source scans (gitleaks, semgrep, trivy fs)
+        run: scripts/scan.sh
+      - name: Build image
+        run: scripts/build.sh
+      - name: Image scan + SBOM (trivy, syft)
+        run: scripts/scan-image.sh
+      - name: Evaluate policy
+        run: scripts/evaluate.sh
+      - name: Upload gate reports
+        if: always() && env.WORK != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-reports
+          path: ${{ env.WORK }}/reports/
+          retention-days: 30
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOYER_SA }}
+      - name: Push image
+        id: push
+        run: scripts/push.sh
+      - name: Clean workspace
+        if: always()
+        run: rm -rf "${WORK:-/nonexistent}"
+
+  deploy:
+    name: Review & deploy
+    needs: gate
+    runs-on: [self-hosted, devsecops-gate]
+    timeout-minutes: 30
+    # Configure this environment with Required reviewers: the human approval gate.
+    environment:
+      name: smoke-review
+      url: ${{ steps.deploy.outputs.url }}
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+    env:
+      REPO: ${{ inputs.repo }}
+      SHA: ${{ needs.gate.outputs.sha }}
+      DIGEST: ${{ needs.gate.outputs.digest }}
+      APP_CONFIG: ${{ needs.gate.outputs.config }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load config
+        run: |
+          grep -E '^[A-Z_]+=' smoke.config.env | sed -E 's/"//g; s/\s+#.*$//' >> "$GITHUB_ENV"
+          echo "WORK=$RUNNER_TEMP/smoke" >> "$GITHUB_ENV"
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOYER_SA }}
+      - name: Sync secrets (Infisical -> Secret Manager)
+        run: scripts/sync-secrets.sh
+      - name: Deploy to Cloud Run
+        id: deploy
+        run: scripts/deploy.sh
+      - name: Smoke check
+        run: scripts/smoke-check.sh
+      - name: DAST (OWASP ZAP baseline)
+        run: scripts/dast.sh
+      - name: Upload DAST report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dast-report
+          path: ${{ env.WORK }}/zap/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  finalize:
+    name: Report status to app repo
+    needs: [gate, deploy]
+    if: always()
+    runs-on: [self-hosted, devsecops-gate]
+    env:
+      REPO: ${{ inputs.repo }}
+      SHA: ${{ needs.gate.outputs.sha }}
+      APP_URL: ${{ needs.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/finalize.sh "${{ needs.gate.result }}" "${{ needs.deploy.result }}"
