@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Bootstrap the DevSecOps VM (Ubuntu 22.04/24.04, x86_64). Run as root:
-#   sudo RUNNER_TOKEN=<token> CONTROL_REPO=testingrino/smoke-landing ./vm/bootstrap.sh
+#   sudo RUNNER_TOKEN=<token> CONTROL_REPO=TestingRino/smoke-landing ./vm/bootstrap.sh
 # RUNNER_TOKEN: control repo -> Settings -> Actions -> Runners -> New self-hosted runner (valid 1h).
 # Without RUNNER_TOKEN, tools are installed and runner registration is skipped.
 set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "run as root"; exit 1; }
-CONTROL_REPO="${CONTROL_REPO:-testingrino/smoke-landing}"
+CONTROL_REPO="${CONTROL_REPO:-TestingRino/smoke-landing}"
 RUNNER_USER=smoke
 YQ_VERSION=v4.44.6
 PACK_VERSION=v0.36.4

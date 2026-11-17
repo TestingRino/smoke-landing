@@ -1,12 +1,12 @@
 # smoke-landing
 
-Landing zone for smoke-testing apps from **github.com/testingrino** before they are handed to the corporate side.
+Landing zone for smoke-testing apps from **github.com/TestingRino** before they are handed to the corporate side.
 Every app goes through the same steps: **pulled from GitHub → DevSecOps gate on a VM → human review → deployed to a public URL with
 secrets injected from a central store → live smoke check + DAST**. App repos need **no changes**. Opting one in takes
 one command.
 
 ```
- testingrino/<any-repo>                    DevSecOps VM (self-hosted runner "devsecops-gate")             Google Cloud (dedicated project)
+ TestingRino/<any-repo>                    DevSecOps VM (self-hosted runner "devsecops-gate")             Google Cloud (dedicated project)
  ─────────────────────                     ──────────────────────────────────────────────────            ────────────────────────────────
  push to default branch ──poll 30 min──▶  1 GATE   gitleaks (full history) · semgrep · trivy fs
    (topic: smoke-deploy)                           build image (Dockerfile or buildpacks)
@@ -30,25 +30,25 @@ one command.
 | **Public test access** | Cloud Run with `--allow-unauthenticated`: an HTTPS URL per app, scale-to-zero (≈$0 while idle), ≤ `MAX_INSTANCES_CAP` instances. |
 | **What was scanned is what runs** | The image is built once, scanned, pushed and deployed **by digest**. |
 | **All repos under the account** | The poller covers every repo with topic `smoke-deploy`, or every repo if `ALL_REPOS="true"`. |
-| **No long-lived cloud keys** | GitHub OIDC → Workload Identity Federation, limited to `testingrino/smoke-landing` on `main` only. |
+| **No long-lived cloud keys** | GitHub OIDC → Workload Identity Federation, limited to `TestingRino/smoke-landing` on `main` only. |
 | **Cleanup** | A daily janitor tears down apps not redeployed within `TTL_DAYS` (default 14). |
 
 ## One-time setup (~1 hour)
 
-**0. Create this repo** as **private** `testingrino/smoke-landing` and push this code to it.
+**0. Create this repo** as **private** `TestingRino/smoke-landing` and push this code to it.
 Never attach a self-hosted runner to a public repo.
 
 **1. GCP**: create a dedicated project (e.g. `testingrino-smoke`) with billing enabled, then:
 ```bash
-./gcp/bootstrap.sh testingrino-smoke us-central1 testingrino smoke-landing
+./gcp/bootstrap.sh testingrino-smoke us-central1 TestingRino smoke-landing
 ```
 Copy the values it prints into `smoke.config.env`.
 
 **2. VM**: Ubuntu 22.04/24.04, x86_64, ≥4 vCPU / 8 GB RAM / 80 GB disk. No inbound ports needed except SSH.
 Get a runner token from *repo → Settings → Actions → Runners → New self-hosted runner*, then:
 ```bash
-git clone https://github.com/testingrino/smoke-landing && cd smoke-landing
-sudo RUNNER_TOKEN=<token> CONTROL_REPO=testingrino/smoke-landing ./vm/bootstrap.sh
+git clone https://github.com/TestingRino/smoke-landing && cd smoke-landing
+sudo RUNNER_TOKEN=<token> CONTROL_REPO=TestingRino/smoke-landing ./vm/bootstrap.sh
 sudo -u smoke ./vm/infisical/setup.sh         # back up vm/infisical/.env right away
 ```
 
@@ -58,7 +58,7 @@ sudo -u smoke ./vm/infisical/setup.sh         # back up vm/infisical/.env right 
 3. Copy the project ID into `smoke.config.env` (`INFISICAL_PROJECT_ID`).
 
 **4. Runner credentials**: edit `/etc/smoke-landing/runner.env` on the VM:
-- `GH_APPS_TOKEN`: a fine-grained PAT. Resource owner `testingrino`, *All repositories*, permissions **Contents: read, Metadata: read, Commit statuses: read & write**.
+- `GH_APPS_TOKEN`: a fine-grained PAT. Resource owner `TestingRino`, *All repositories*, permissions **Contents: read, Metadata: read, Commit statuses: read & write**.
 - `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET`: from step 3.
 
 **5. GitHub review gate**: in *smoke-landing → Settings → Environments*, create `smoke-review`.

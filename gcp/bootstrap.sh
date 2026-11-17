@@ -3,7 +3,7 @@
 #   ./gcp/bootstrap.sh <project-id> [region] [github-owner] [control-repo-name]
 set -euo pipefail
 PROJECT="${1:?project id}"; REGION="${2:-us-central1}"
-GH_OWNER="${3:-testingrino}"; CTRL="${4:-smoke-landing}"
+GH_OWNER="${3:-TestingRino}"; CTRL="${4:-smoke-landing}"
 AR_REPO=smoke-apps; POOL=smoke-landing; PROVIDER=github; SA_ID=smoke-deployer
 G=(--project "$PROJECT" --quiet)
 NUM="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
@@ -41,6 +41,7 @@ bind gcloud artifacts repositories add-iam-policy-binding "$AR_REPO" "${G[@]}" -
   --member "serviceAccount:$SA" --role roles/artifactregistry.repoAdmin
 
 # Workload Identity Federation: ONLY the control repo's main branch can impersonate the deployer.
+# NOTE: the owner name is compared CASE-SENSITIVELY: use the exact GitHub spelling (e.g. TestingRino).
 gcloud iam workload-identity-pools describe "$POOL" "${G[@]}" --location global >/dev/null 2>&1 || \
   gcloud iam workload-identity-pools create "$POOL" "${G[@]}" --location global --display-name "smoke-landing"
 gcloud iam workload-identity-pools providers describe "$PROVIDER" "${G[@]}" --location global --workload-identity-pool "$POOL" >/dev/null 2>&1 || \
