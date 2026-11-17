@@ -59,8 +59,13 @@ if [[ -n "${RUNNER_TOKEN:-}" ]]; then
   dir="/home/$RUNNER_USER/actions-runner"
   sudo -u "$RUNNER_USER" mkdir -p "$dir"
   curl -fsSL "https://github.com/actions/runner/releases/download/v${ver}/actions-runner-linux-x64-${ver}.tar.gz" | sudo -u "$RUNNER_USER" tar -xz -C "$dir"
-  sudo -u "$RUNNER_USER" "$dir/config.sh" --unattended --url "https://github.com/$CONTROL_REPO" --token "$RUNNER_TOKEN" \
-    --name "devsecops-$(hostname)" --labels devsecops-gate --replace
+  # Runner name: <=64 chars, no " / : < > \\ | * ? (override with RUNNER_NAME=...)
+  name="${RUNNER_NAME:-devsecops-gate-1}"
+  name="$(printf '%s' "$name" | tr -cd 'A-Za-z0-9._-' | cut -c1-64)"
+  token="$(printf '%s' "$RUNNER_TOKEN" | tr -d '[:space:]<>')"
+  echo "Registering runner '$name' with https://github.com/$CONTROL_REPO"
+  sudo -u "$RUNNER_USER" "$dir/config.sh" --unattended --url "https://github.com/$CONTROL_REPO" --token "$token" \
+    --name "$name" --labels devsecops-gate --replace
   (cd "$dir" && ./svc.sh install "$RUNNER_USER" && ./svc.sh start)
 fi
 
