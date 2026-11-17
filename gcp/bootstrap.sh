@@ -25,11 +25,20 @@ gcloud artifacts repositories set-cleanup-policies "$AR_REPO" "${G[@]}" --locati
 
 gcloud iam service-accounts describe "$SA" "${G[@]}" >/dev/null 2>&1 || \
   gcloud iam service-accounts create "$SA_ID" "${G[@]}" --display-name "smoke-landing deployer"
+# A new service account takes a few seconds to become visible to IAM policy bindings: retry.
+bind() {
+  local i
+  for i in 1 2 3 4 5 6 7 8; do
+    "$@" >/dev/null 2>&1 && return 0
+    echo "  waiting for new service account to propagate (attempt $i)..."; sleep $((i * 5))
+  done
+  "$@" >/dev/null   # final attempt shows the real error
+}
 for role in roles/run.admin roles/secretmanager.admin roles/iam.serviceAccountAdmin roles/iam.serviceAccountUser; do
-  gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SA" --role "$role" --condition=None --quiet >/dev/null
+  bind gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SA" --role "$role" --condition=None --quiet
 done
-gcloud artifacts repositories add-iam-policy-binding "$AR_REPO" "${G[@]}" --location "$REGION" \
-  --member "serviceAccount:$SA" --role roles/artifactregistry.repoAdmin >/dev/null
+bind gcloud artifacts repositories add-iam-policy-binding "$AR_REPO" "${G[@]}" --location "$REGION" \
+  --member "serviceAccount:$SA" --role roles/artifactregistry.repoAdmin
 
 # Workload Identity Federation: ONLY the control repo's main branch can impersonate the deployer.
 gcloud iam workload-identity-pools describe "$POOL" "${G[@]}" --location global >/dev/null 2>&1 || \
