@@ -42,6 +42,7 @@ jq -n --arg repo "$OWNER/$REPO" --arg sha "$SHA" --arg verdict "$verdict" --argj
   '{repo:$repo, commit:$sha, verdict:$verdict, checks:$checks, run:$run, evaluatedAt:$at, policyHash:$policy}' > "$REP/summary.json"
 "$(dirname "$0")/report.sh"
 out verdict "$verdict"
+out blocking "$(jq '[.[] | select(.blocking)] | length' "$REP/findings.json")"
 export_env VERDICT "$verdict"
 
 if [[ "$verdict" == block ]]; then

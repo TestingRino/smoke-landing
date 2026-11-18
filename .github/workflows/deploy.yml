@@ -1,6 +1,8 @@
 name: smoke-deploy
 run-name: "smoke: ${{ inputs.repo }} @ ${{ inputs.ref || 'default branch' }}"
 
+# gate (VM) -> staging (Cloud Run, automatic when the gate passes). Release is a separate,
+# human-triggered workflow (release.yml); the binding approval happens inside the boundary.
 # Only workflow_dispatch: no pull_request triggers, so fork PRs can never reach the self-hosted runner.
 on:
   workflow_dispatch:
@@ -32,6 +34,8 @@ jobs:
       sha: ${{ steps.resolve.outputs.sha }}
       config: ${{ steps.resolve.outputs.config }}
       digest: ${{ steps.push.outputs.digest }}
+      verdict: ${{ steps.evaluate.outputs.verdict }}
+      blocking: ${{ steps.evaluate.outputs.blocking }}
     env:
       REPO: ${{ inputs.repo }}
       REF: ${{ inputs.ref }}
@@ -49,7 +53,18 @@ jobs:
       - name: Image scan + SBOM (trivy, syft)
         run: scripts/scan-image.sh
       - name: Evaluate policy
+        id: evaluate
         run: scripts/evaluate.sh
+      # Runs on pass AND block: opens issues for new blocking findings, closes fixed ones.
+      - name: File GitHub issues
+        if: always() && env.WORK != ''
+        run: scripts/file-issues.sh
+      # Tracker only: never changes the verdict (the script always exits 0).
+      - name: Record findings in DefectDojo
+        if: always() && env.WORK != ''
+        continue-on-error: true
+        timeout-minutes: 8
+        run: scripts/defectdojo-import.sh gate
       - name: Upload gate reports
         if: always() && env.WORK != ''
         uses: actions/upload-artifact@v4
@@ -57,6 +72,7 @@ jobs:
           name: gate-reports
           path: ${{ env.WORK }}/reports/
           retention-days: 30
+      # Everything below runs only when the gate passed.
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
@@ -65,23 +81,28 @@ jobs:
       - name: Push image
         id: push
         run: scripts/push.sh
+      - name: Sign & attest (SBOM, provenance, gate result)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: scripts/sign-attest.sh
       - name: Clean workspace
         if: always()
         run: rm -rf "${WORK:-/nonexistent}"
 
-  deploy:
-    name: Review & deploy
+  staging:
+    name: Staging (Cloud Run)
     needs: gate
     runs-on: [self-hosted, devsecops-gate]
     timeout-minutes: 30
-    # Configure this environment with Required reviewers: the human approval gate.
+    # No protection rules (not available on this plan, and staging is automatic): URL display only.
     environment:
-      name: smoke-review
+      name: staging
       url: ${{ steps.deploy.outputs.url }}
     outputs:
       url: ${{ steps.deploy.outputs.url }}
     env:
       REPO: ${{ inputs.repo }}
+      REF: ${{ inputs.ref }}
       SHA: ${{ needs.gate.outputs.sha }}
       DIGEST: ${{ needs.gate.outputs.digest }}
       APP_CONFIG: ${{ needs.gate.outputs.config }}
@@ -96,7 +117,7 @@ jobs:
         with:
           workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
           service_account: ${{ env.GCP_DEPLOYER_SA }}
-      - name: Sync secrets (Infisical -> Secret Manager)
+      - name: Wire secrets (Secret Manager -> Cloud Run; values never read)
         run: scripts/sync-secrets.sh
       - name: Deploy to Cloud Run
         id: deploy
@@ -105,6 +126,13 @@ jobs:
         run: scripts/smoke-check.sh
       - name: DAST (OWASP ZAP baseline)
         run: scripts/dast.sh
+      - name: Attest staging
+        run: scripts/attest-staging.sh
+      - name: Record DAST findings in DefectDojo
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 5
+        run: scripts/defectdojo-import.sh dast
       - name: Upload DAST report
         if: always()
         uses: actions/upload-artifact@v4
@@ -113,16 +141,21 @@ jobs:
           path: ${{ env.WORK }}/zap/
           if-no-files-found: ignore
           retention-days: 30
+      - name: Clean workspace
+        if: always()
+        run: rm -rf "${WORK:-/nonexistent}"
 
   finalize:
     name: Report status to app repo
-    needs: [gate, deploy]
+    needs: [gate, staging]
     if: always()
     runs-on: [self-hosted, devsecops-gate]
     env:
       REPO: ${{ inputs.repo }}
       SHA: ${{ needs.gate.outputs.sha }}
-      APP_URL: ${{ needs.deploy.outputs.url }}
+      APP_URL: ${{ needs.staging.outputs.url }}
+      VERDICT: ${{ needs.gate.outputs.verdict }}
+      BLOCKING: ${{ needs.gate.outputs.blocking }}
     steps:
       - uses: actions/checkout@v4
-      - run: scripts/finalize.sh "${{ needs.gate.result }}" "${{ needs.deploy.result }}"
+      - run: scripts/finalize.sh "${{ needs.gate.result }}" "${{ needs.staging.result }}"

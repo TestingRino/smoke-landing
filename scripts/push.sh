@@ -11,4 +11,4 @@ digest="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "
 docker rmi "$IMAGE_LOCAL" "$remote:${SHA:0:12}" >/dev/null 2>&1 || true
 log "Pushed $remote@$digest"
 out digest "$digest"
-set_status "$SHA" pending "Gate passed: awaiting human review"
+set_status "$SHA" pending "Gate passed: signing and deploying to staging"
