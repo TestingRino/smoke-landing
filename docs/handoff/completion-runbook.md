@@ -137,11 +137,12 @@ http.createServer((req, res) => {
   "scripts": { "start": "node server.js" }, "dependencies": {} }
 ```
 
-`Dockerfile`
+`Dockerfile` (the `npm install` puts dependencies into the image, which is what the gate scans for CVEs)
 ```dockerfile
 FROM node:22-alpine
 WORKDIR /app
 COPY package.json server.js ./
+RUN npm install --omit=dev --no-audit --no-fund
 USER node
 EXPOSE 8080
 CMD ["node", "server.js"]
@@ -187,8 +188,8 @@ max_instances: 1
 - [ ] `bin/smokectl deploy smoke-hello`. Expect the gate **⛔ BLOCKED** (secrets ≥1, vuln_high ≥1), **no staging deploy**, and commit status **"Blocked at gate: N blocking findings (see issues)"**.
 - [ ] `smoke-hello` → Issues: one issue per blocking finding, labelled `smoke-gate`, `severity:*`.
 - [ ] Run the same deploy again: **no duplicate issues** are created.
-- [ ] Revert that commit (delete `config.js`, remove lodash), deploy again. Expect pass, and the earlier issues **closed automatically** with a "No longer detected" comment.
-- [ ] Note: the fake token stays in git **history**, and gitleaks scans history. If it still blocks, add its fingerprint (shown in the issue) to `policy/exceptions/smoke-hello/gitleaksignore` via PR. That also exercises the exception process.
+- [ ] Revert that commit (delete `config.js`, remove lodash), deploy again. Expect the lodash issues **closed automatically** with a "No longer detected" comment; the secret still blocks (next step).
+- [ ] The fake token stays in git **history**, and gitleaks scans history, so the run after the revert **still blocks** on that one secret. That's expected. Copy its fingerprint from the secret's issue (the line `gitleaks fingerprint: …`) into `policy/exceptions/smoke-hello/gitleaksignore` in smoke-landing, with a comment saying it's a fake test token, through a PR to `main`. Once merged, deploy again: expect pass and the issues closed. This also exercises the exception process.
 
 ### 4.5 Release path
 
@@ -197,7 +198,7 @@ max_instances: 1
   bin/smokectl release smoke-hello <sha> "E2E test of release path"
   ```
 - [ ] Expect the **smoke-release** run (Verify & promote) ✅; its summary prints a **boundary reference** `us-central1-docker.pkg.dev/testingrino-smoke/smoke-release/smoke-hello@sha256:…`. Commit status `smoke-landing/release` ✅.
-- [ ] **Negative test:** release the **blocked** SHA from 4.4. Expect the run to **fail** with a message about a missing or failed gate attestation.
+- [ ] **Negative test:** release the **blocked** SHA from 4.4. Expect the run to **fail** with "Release refused: no SIGNED staging image … (did the gate pass for this commit?)": a blocked commit is never pushed or signed.
 - [ ] Verify the signature yourself in Cloud Shell. The README section "Release and the boundary" has the three commands (install cosign, configure docker, `cosign verify`). Expect "The following checks were performed" and the same `sha256:` digest.
 
 ### 4.6 Boundary dry run (with the GitLab team, ≈1 h)
