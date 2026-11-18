@@ -1,0 +1,91 @@
+# Boundary import pipeline for smoke-landing releases. Template: the corporate GitLab team owns and adapts it.
+#
+# Run it from CI/CD -> Pipelines -> "Run pipeline" on a PROTECTED branch, with variables:
+#   RELEASE_REF    us-central1-docker.pkg.dev/testingrino-smoke/smoke-release/<app>@sha256:...   (from the release run summary)
+#   EXPECTED_REPO  TestingRino/<app>                                                        (the GitHub source you expect)
+#
+# Project CI/CD variables (Settings -> CI/CD -> Variables), all PROTECTED; secrets also MASKED:
+#   BOUNDARY_PULL_KEY      File variable: boundary-puller service-account JSON (read-only on smoke-release). Rotate every 90 days.
+#   APPROVERS              comma-separated GitLab usernames allowed to approve imports, e.g. "jdoe,asmith"
+#   GITHUB_TO_GITLAB_USERS optional "githubLogin=gitlabUser,..." so the commit author can be excluded from approving
+#   INTERNAL_REGISTRY      e.g. $CI_REGISTRY_IMAGE/smoke-imports
+#   TOOLS_IMAGE            an internal image with cosign 2.4.x, trivy, jq, bash (mirror it; don't pull from the internet)
+#
+# GitLab Free has no protected-environment approvals, so the approve job enforces the rules itself:
+# approver in APPROVERS, approver != pipeline creator, approver != commit author (when mapped).
+# On Premium/Ultimate, replace that with a protected environment + required approvals (see README).
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_REF_PROTECTED == "true" && $RELEASE_REF && $EXPECTED_REPO'
+
+stages: [verify, rescan, approve, import, deploy]
+
+default:
+  image: $TOOLS_IMAGE
+  before_script:
+    - set -euo pipefail
+    - cosign login us-central1-docker.pkg.dev -u _json_key --password-stdin < "$BOUNDARY_PULL_KEY" >/dev/null
+
+verify:
+  stage: verify
+  script:
+    - echo "$GITLAB_USER_LOGIN" > creator.txt
+    - boundary/verify-and-import.sh --phase verify "$RELEASE_REF" "$EXPECTED_REPO"
+    - jq . verify.json
+  artifacts:
+    paths: [verify.json, creator.txt]
+    expire_in: 30 days
+
+rescan:
+  stage: rescan
+  script:
+    # Air-gapped: set TRIVY_OFFLINE=true and point TRIVY_CACHE_DIR at your mirrored Trivy DB.
+    - boundary/verify-and-import.sh --phase rescan "$RELEASE_REF" "$EXPECTED_REPO"
+
+approve:
+  stage: approve
+  when: manual
+  allow_failure: false        # the pipeline waits here; import can't run until someone allowed approves
+  script:
+    - approver="$GITLAB_USER_LOGIN"   # in a manual job: the person who clicked "Run"
+    - creator="$(cat creator.txt)"
+    - author_gh="$(jq -r .commitAuthor verify.json)"
+    - releaser_gh="$(jq -r .releasedBy verify.json)"
+    - map() { tr ',' '\n' <<< "${GITHUB_TO_GITLAB_USERS:-}" | awk -F= -v u="$1" '$1==u {print $2}'; }
+    - |
+      echo "approver=$approver creator=$creator commitAuthor(GitHub)=$author_gh releasedBy(GitHub)=$releaser_gh"
+      tr ',' '\n' <<< "${APPROVERS:?}" | grep -qxF "$approver" || { echo "REFUSED: $approver is not in APPROVERS"; exit 1; }
+      [[ "$approver" != "$creator" ]] || { echo "REFUSED: the approver started this pipeline; someone else must approve"; exit 1; }
+      a="$(map "$author_gh")"; r="$(map "$releaser_gh")"
+      [[ -z "$a" || "$approver" != "$a" ]] || { echo "REFUSED: the approver wrote this code ($author_gh)"; exit 1; }
+      [[ -z "$r" || "$approver" != "$r" ]] || { echo "REFUSED: the approver also released it in smoke-landing ($releaser_gh)"; exit 1; }
+      [[ -n "$a" ]] || echo "NOTE: commit author $author_gh has no GITHUB_TO_GITLAB_USERS mapping; author check skipped"
+      jq -n --arg by "$approver" --arg at "$(date -u +%FT%TZ)" --slurpfile v verify.json '$v[0] + {boundaryApprovedBy:$by, boundaryApprovedAt:$at}' > approval.json
+      echo "APPROVED by $approver"
+  artifacts:
+    paths: [approval.json]
+    expire_in: 400 days
+
+import:
+  stage: import
+  needs: [verify, rescan, approve]
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | cosign login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin >/dev/null
+    - boundary/verify-and-import.sh --phase import "$RELEASE_REF" "$EXPECTED_REPO"   # re-verifies, copies by digest
+  artifacts:
+    reports:
+      dotenv: import.env       # INTERNAL_REF=<internal registry>/<app>@sha256:...
+    paths: [import.env]
+
+deploy:
+  stage: deploy
+  needs: [import]
+  tags: [smoke-deploy-vm]      # a shell runner ON the deploy VM, where /etc/containers/policy.json enforces signatures
+  before_script: []
+  script:
+    - echo "deploying $INTERNAL_REF"
+    # podman refuses anything not signed by the pinned smoke-landing key (boundary/podman/). Secrets come from
+    # YOUR secrets store at runtime; nothing from Google Secret Manager crosses the boundary.
+    - podman pull "$INTERNAL_REF"
+    - echo "Adapt: podman run / systemd quadlet for $INTERNAL_REF with your own env and secrets"

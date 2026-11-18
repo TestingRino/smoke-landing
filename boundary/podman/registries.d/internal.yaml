@@ -1,0 +1,5 @@
+# Tell podman/containers-image to look for cosign (sigstore) signatures stored next to the image in the
+# internal registry (cosign copy put them there as sha256-<digest>.sig tags).
+docker:
+  registry.corp.example/apps/smoke-imports:
+    use-sigstore-attachments: true

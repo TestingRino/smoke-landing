@@ -9,7 +9,9 @@ require WORK REPO SHA DIGEST
 REP="$WORK/reports"; ref="$(image_remote "$REPO")@$DIGEST"
 run_url="${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-}"
 
-cosign sign --key "$(sign_key)" "${COSIGN_FLAGS[@]}" "$ref" >/dev/null
+# --recursive: also sign each platform manifest inside the OCI index, so podman (which verifies the
+# per-platform manifest it actually pulls) finds a signature. Docker 29 pushes an index (image + build attestation).
+cosign sign --recursive --key "$(sign_key)" "${COSIGN_FLAGS[@]}" "$ref" >/dev/null
 attest "$ref" "$REP/sbom.spdx.json" spdxjson
 
 jq -n --arg repo "https://github.com/$OWNER/$REPO" --arg sha "$SHA" --arg run "$run_url" \

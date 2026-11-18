@@ -1,0 +1,10 @@
+{
+  "default": [{ "type": "reject" }],
+  "transports": {
+    "docker": {},
+    "docker-daemon": { "": [{ "type": "reject" }] },
+    "docker-archive": { "": [{ "type": "reject" }] },
+    "oci-archive": { "": [{ "type": "reject" }] },
+    "dir": { "": [{ "type": "reject" }] }
+  }
+}
