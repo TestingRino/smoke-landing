@@ -112,10 +112,17 @@ case "$cmd" in
       --role "projects/$GCP_PROJECT/roles/smokeSecretWriter" --all >/dev/null && echo "revoked" ;;
 
   grant-dojo)
-    e="${1:?email}"; vm="projects/$GCP_PROJECT/zones/$VM_ZONE/instances/$VM_NAME"
+    e="${1:?email}"
+    [[ -n "$(gcloud config get-value account 2>/dev/null)" && "$(gcloud config get-value account 2>/dev/null)" != *gserviceaccount.com ]] \
+      || die "run this in Cloud Shell (or wherever you're logged in to gcloud as yourself), not on the VM"; vm="projects/$GCP_PROJECT/zones/$VM_ZONE/instances/$VM_NAME"
     # IAP tunnel to the DefectDojo port ONLY (not 22: no SSH through IAP)
-    gcloud projects add-iam-policy-binding "$GCP_PROJECT" --quiet --member "user:$e" --role roles/iap.tunnelResourceAccessor \
-      --condition "expression=destination.port == $DEFECTDOJO_PORT,title=defectdojo-iap-port-only" >/dev/null
+    if ! err="$(gcloud projects add-iam-policy-binding "$GCP_PROJECT" --quiet --member "user:$e" --role roles/iap.tunnelResourceAccessor \
+          --condition "expression=destination.port == $DEFECTDOJO_PORT,title=defectdojo-iap-port-only" 2>&1 >/dev/null)"; then
+      if grep -q "does not exist" <<< "$err"; then
+        die "$e is not a Google account. IAP needs one: they can create a free Google account on this same address at https://accounts.google.com/signup ('Use my current email address instead'), or give you the Google account they already use."
+      fi
+      die "could not grant IAP access: $(grep -E 'ERROR' <<< "$err" | tail -1)"
+    fi
     # gcloud looks the VM up by name before tunnelling: compute.instances.get on this one VM
     gcloud projects add-iam-policy-binding "$GCP_PROJECT" --quiet --member "user:$e" \
       --role "projects/$GCP_PROJECT/roles/smokeDojoTunnel" \
