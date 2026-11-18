@@ -1,3 +1,5 @@
 .env
 *.env.local
 runner.env
+smoke-landing-signing.pub
+boundary-puller.json
