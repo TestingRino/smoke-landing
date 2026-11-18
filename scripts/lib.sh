@@ -8,7 +8,7 @@ source "$SMOKE_ROOT/smoke.config.env"
 # shellcheck source=../policy/gate.env
 source "$SMOKE_ROOT/policy/gate.env"
 
-# VM-local credentials: GH_APPS_TOKEN, INFISICAL_URL, INFISICAL_CLIENT_ID, INFISICAL_CLIENT_SECRET.
+# VM-local credentials: GH_APPS_TOKEN.
 # They never live in git or in GitHub secrets.
 SMOKE_RUNNER_ENV="${SMOKE_RUNNER_ENV:-/etc/smoke-landing/runner.env}"
 if [[ -r "$SMOKE_RUNNER_ENV" ]]; then
@@ -51,7 +51,6 @@ runtime_sa_id() {   # IAM SA id: 6-30 chars. One runtime identity per app, so ap
 runtime_sa_email() { echo "$(runtime_sa_id "$1")@${GCP_PROJECT}.iam.gserviceaccount.com"; }
 image_remote() { echo "${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/${AR_REPO}/$(slug "$1")"; }
 secret_name() { echo "smoke-$(slug "$1")-$2"; }
-infisical_path() { echo "/$(echo "$1" | sed -E 's/[^A-Za-z0-9_-]/-/g')"; }
 
 # App config (.smoke.yml, as compact JSON in $APP_CONFIG) ----------------------
 cfg() { jq -r --arg k "$1" --arg d "$2" '(.[$k] // $d) | tostring' <<< "${APP_CONFIG:-{\}}"; }
@@ -66,3 +65,16 @@ set_status() {   # sha state description [target_url]
 }
 
 docker_user() { echo "$(id -u):$(id -g)"; }
+
+# Signing (cosign + Cloud KMS). No public transparency log: repo names/digests stay private.
+COSIGN_FLAGS=(--tlog-upload=false --yes)
+PUBKEY_FILE="$SMOKE_ROOT/keys/smoke-landing-signing.pub"
+verify_key() { if [[ -s "$PUBKEY_FILE" ]]; then echo "$PUBKEY_FILE"; else echo "$KMS_KEY"; fi; }
+attest() {   # ref predicate-file type
+  cosign attest --key "$KMS_KEY" "${COSIGN_FLAGS[@]}" --type "$3" --predicate "$2" "$1" >/dev/null
+}
+# Print the predicate of the newest attestation of a type on ref (after verifying its signature).
+read_attestation() {   # ref type
+  cosign verify-attestation --key "$(verify_key)" --insecure-ignore-tlog=true --type "$2" "$1" 2>/dev/null \
+    | jq -s 'map(.payload | @base64d | fromjson | .predicate) | last'
+}

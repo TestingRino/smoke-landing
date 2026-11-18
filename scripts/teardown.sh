@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Tear down an app: Cloud Run service, its GCP secrets, runtime SA and images. Infisical is left untouched.
+# Tear down an app's STAGING deployment: Cloud Run service, runtime SA and staging images.
+# Secrets in Secret Manager are the source of truth and are NOT deleted (use `smokectl secret rm`).
+# Released images in the release registry are never touched.
 #   teardown.sh <repo>        one app
 #   teardown.sh --expired     every smoke service not redeployed within TTL_DAYS
 source "$(dirname "$0")/lib.sh"
@@ -7,11 +9,9 @@ require GCP_PROJECT GCP_REGION
 G=(--project "$GCP_PROJECT" --quiet)
 
 teardown() {   # service app-label runtime-sa
-  local svc="$1" lbl="$2" sa="$3" n
+  local svc="$1" lbl="$2" sa="$3"
   log "tearing down $svc"
   gcloud run services delete "$svc" "${G[@]}" --region "$GCP_REGION" >/dev/null 2>&1 || true
-  while IFS= read -r n; do [[ -n "$n" ]] && gcloud secrets delete "${n##*/}" "${G[@]}" >/dev/null; done \
-    < <(gcloud secrets list "${G[@]}" --filter="labels.smoke-app=$lbl" --format='value(name)')
   [[ "$sa" == sm-*@"$GCP_PROJECT".iam.gserviceaccount.com ]] && gcloud iam service-accounts delete "$sa" "${G[@]}" >/dev/null 2>&1 || true
   gcloud artifacts packages delete "$lbl" "${G[@]}" --repository "$AR_REPO" --location "$GCP_REGION" >/dev/null 2>&1 || true
   echo "- 🗑️ \`$svc\` removed" | summary
