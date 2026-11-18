@@ -2,7 +2,7 @@
 # After staging deploy + smoke check + DAST succeed: attest that this exact digest ran live in staging.
 # Release requires this attestation. (Secrets are NOT part of the artifact: Cloud Run injects them at runtime.)
 source "$(dirname "$0")/lib.sh"
-require WORK REPO SHA DIGEST APP_URL KMS_KEY
+require WORK REPO SHA DIGEST APP_URL
 ref="$(image_remote "$REPO")@$DIGEST"
 zap="$WORK/zap/zap.json"
 high=null; med=null

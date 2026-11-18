@@ -49,7 +49,10 @@ runtime_sa_id() {   # IAM SA id: 6-30 chars. One runtime identity per app, so ap
   echo "sm-${s}-${h}"
 }
 runtime_sa_email() { echo "$(runtime_sa_id "$1")@${GCP_PROJECT}.iam.gserviceaccount.com"; }
-image_remote() { echo "${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/${AR_REPO}/$(slug "$1")"; }
+# AR_HOST can be overridden (tests use a local registry); in production it's <region>-docker.pkg.dev.
+ar_host() { echo "${AR_HOST:-${GCP_REGION}-docker.pkg.dev}"; }
+image_remote()   { echo "$(ar_host)/${GCP_PROJECT}/${AR_REPO}/$(slug "$1")"; }        # staging (every passing build)
+release_remote() { echo "$(ar_host)/${GCP_PROJECT}/${RELEASE_REPO}/$(slug "$1")"; }  # promoted only; the boundary reads this
 secret_name() { echo "smoke-$(slug "$1")-$2"; }
 
 # App config (.smoke.yml, as compact JSON in $APP_CONFIG) ----------------------
@@ -68,13 +71,22 @@ docker_user() { echo "$(id -u):$(id -g)"; }
 
 # Signing (cosign + Cloud KMS). No public transparency log: repo names/digests stay private.
 COSIGN_FLAGS=(--tlog-upload=false --yes)
-PUBKEY_FILE="$SMOKE_ROOT/keys/smoke-landing-signing.pub"
-verify_key() { if [[ -s "$PUBKEY_FILE" ]]; then echo "$PUBKEY_FILE"; else echo "$KMS_KEY"; fi; }
+# SMOKE_SIGNING_KEY / SMOKE_PUBKEY_FILE: test-only overrides (a local cosign key pair instead of Cloud KMS).
+PUBKEY_FILE="${SMOKE_PUBKEY_FILE:-$SMOKE_ROOT/keys/smoke-landing-signing.pub}"
+sign_key()   { echo "${SMOKE_SIGNING_KEY:-$KMS_KEY}"; }
+verify_key() { if [[ -s "$PUBKEY_FILE" ]]; then echo "$PUBKEY_FILE"; else sign_key; fi; }
 attest() {   # ref predicate-file type
-  cosign attest --key "$KMS_KEY" "${COSIGN_FLAGS[@]}" --type "$3" --predicate "$2" "$1" >/dev/null
+  cosign attest --key "$(sign_key)" "${COSIGN_FLAGS[@]}" --type "$3" --predicate "$2" "$1" >/dev/null
 }
-# Print the predicate of the newest attestation of a type on ref (after verifying its signature).
-read_attestation() {   # ref type
-  cosign verify-attestation --key "$(verify_key)" --insecure-ignore-tlog=true --type "$2" "$1" 2>/dev/null \
-    | jq -s 'map(.payload | @base64d | fromjson | .predicate) | last'
+# All VERIFIED predicates of one attestation type on ref, as a JSON array (empty array if none verify).
+# Callers select by content (digest, commit, timestamps): cosign returns attestations in no guaranteed order.
+read_attestations() {   # ref type
+  local out
+  out="$(cosign verify-attestation --key "$(verify_key)" --insecure-ignore-tlog=true --type "$2" "$1" 2>/dev/null)" || { echo '[]'; return 0; }
+  jq -s 'map(.payload | @base64d | fromjson | .predicate)' <<< "$out"
+}
+# Digest of a signed image: verifies the signature and returns the digest it covers (fails if unsigned).
+signed_digest() {   # ref (tag or digest); prints nothing (and succeeds) if it isn't validly signed
+  { cosign verify --key "$(verify_key)" --insecure-ignore-tlog=true "$1" 2>/dev/null || echo '[]'; } \
+    | jq -r '[.[].critical.image["docker-manifest-digest"]] | unique | if length == 1 then .[0] else empty end'
 }

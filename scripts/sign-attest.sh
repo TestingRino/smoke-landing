@@ -5,11 +5,11 @@
 #   3. gate result                       (--type $ATTEST_GATE_TYPE): verdict, counts, policy hash, run
 # Everything is bound to the image DIGEST, so it cannot be moved to a different image.
 source "$(dirname "$0")/lib.sh"
-require WORK REPO SHA DIGEST KMS_KEY
+require WORK REPO SHA DIGEST
 REP="$WORK/reports"; ref="$(image_remote "$REPO")@$DIGEST"
 run_url="${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-}"
 
-cosign sign --key "$KMS_KEY" "${COSIGN_FLAGS[@]}" "$ref" >/dev/null
+cosign sign --key "$(sign_key)" "${COSIGN_FLAGS[@]}" "$ref" >/dev/null
 attest "$ref" "$REP/sbom.spdx.json" spdxjson
 
 jq -n --arg repo "https://github.com/$OWNER/$REPO" --arg sha "$SHA" --arg run "$run_url" \
