@@ -8,6 +8,8 @@ max_instances: 1        # capped by MAX_INSTANCES_CAP in policy/gate.env
 # context: .
 # entrypoint: "gunicorn -b :$PORT app:app"   # buildpacks only (Python usually needs this)
 zap: true               # post-deploy OWASP ZAP baseline scan
-env:                    # NON-secret config only. Secrets go in Infisical, never here.
+shared_secrets:         # opt in to shared keys (smoke-shared-<KEY> in Secret Manager)
+  - OPENAI_API_KEY
+env:                    # NON-secret config only. Secrets: `smokectl secret set <repo> KEY`, never here.
   NODE_ENV: production
   LOG_LEVEL: info

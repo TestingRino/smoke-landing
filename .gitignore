@@ -1,4 +1,5 @@
 .env
 *.env.local
-vm/infisical/.env
 runner.env
+/smoke-landing-signing.pub
+/boundary-puller.json

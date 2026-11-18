@@ -1,0 +1,61 @@
+name: smoke-release
+run-name: "release: ${{ inputs.repo }} @ ${{ inputs.commit }} by ${{ github.actor }}"
+
+# Human-triggered promotion: staging image -> release registry (smoke-release), which the boundary pulls.
+# Records who approved and why (release attestation). Fails closed unless the exact digest is signed,
+# passed the gate and passed staging. The binding approval happens inside the boundary (GitLab).
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "App repository name (under the configured OWNER)"
+        required: true
+        type: string
+      commit:
+        description: "Commit SHA that passed staging (full or short)"
+        required: true
+        type: string
+      justification:
+        description: "Why this goes to the corporate side (recorded in the signed release attestation)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: release-${{ inputs.repo }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Verify & promote
+    runs-on: [self-hosted, devsecops-gate]
+    timeout-minutes: 20
+    env:
+      REPO: ${{ inputs.repo }}
+      COMMIT: ${{ inputs.commit }}
+      JUSTIFICATION: ${{ inputs.justification }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load config
+        run: |
+          grep -E '^[A-Z_]+=' smoke.config.env | sed -E 's/"//g; s/\s+#.*$//' >> "$GITHUB_ENV"
+          echo "WORK=$RUNNER_TEMP/release" >> "$GITHUB_ENV"
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOYER_SA }}
+      - name: Verify (fail closed), promote, attest
+        id: release
+        run: scripts/release.sh
+      - name: Upload release manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest
+          path: ${{ env.WORK }}/release-manifest.json
+          if-no-files-found: ignore
+          retention-days: 400

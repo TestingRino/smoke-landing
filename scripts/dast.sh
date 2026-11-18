@@ -7,7 +7,7 @@ zap="$(cfg zap "$ZAP_ENABLED")"
 
 dir="$WORK/zap"; mkdir -p "$dir"; chmod 777 "$dir"
 rc=0
-docker run --rm -v "$dir:/zap/wrk:rw" "$ZAP_IMAGE" zap-baseline.py -t "$APP_URL" -J zap.json -r zap.html -I || rc=$?
+docker run --rm -v "$dir:/zap/wrk:rw" "$ZAP_IMAGE" zap-baseline.py -t "$APP_URL" -J zap.json -x zap.xml -r zap.html -I || rc=$?
 [[ -s "$dir/zap.json" ]] || { warn "ZAP produced no report (exit $rc)"; exit 0; }
 
 high=$(jq '[.site[]?.alerts[]? | select(.riskcode=="3")] | length' "$dir/zap.json")

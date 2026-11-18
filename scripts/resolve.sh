@@ -32,6 +32,7 @@ log "App config: $APP_CONFIG"
 
 export_env WORK "$WORK"
 export_env SHA "$sha"
+export_env REPO_PRIVATE "$(jq -r .private <<< "$meta")"
 export_env APP_CONFIG "$APP_CONFIG"
 out sha "$sha"
 out config "$APP_CONFIG"

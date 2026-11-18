@@ -9,6 +9,7 @@ CONTROL_REPO="${CONTROL_REPO:-TestingRino/smoke-landing}"
 RUNNER_USER=smoke
 YQ_VERSION=v4.44.6
 PACK_VERSION=v0.36.4
+COSIGN_VERSION=v2.4.1
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
@@ -29,6 +30,7 @@ apt-get install -yq docker-ce docker-ce-cli containerd.io docker-buildx-plugin d
 
 curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
 curl -fsSL "https://github.com/buildpacks/pack/releases/download/${PACK_VERSION}/pack-${PACK_VERSION}-linux.tgz" | tar -xz -C /usr/local/bin pack
+curl -fsSL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" -o /usr/local/bin/cosign && chmod +x /usr/local/bin/cosign
 
 cat > /etc/docker/daemon.json <<'EOF'
 { "log-driver": "json-file", "log-opts": { "max-size": "20m", "max-file": "3" }, "live-restore": true }
@@ -72,4 +74,4 @@ fi
 # Pre-pull pinned scanner images
 set -a; source "$(dirname "$0")/../smoke.config.env"; set +a
 for img in "$GITLEAKS_IMAGE" "$SEMGREP_IMAGE" "$TRIVY_IMAGE" "$SYFT_IMAGE" "$ZAP_IMAGE" "$BUILDPACK_BUILDER"; do docker pull -q "$img"; done
-echo "VM bootstrap complete. Next: vm/infisical/setup.sh"
+echo "VM bootstrap complete. Next: edit /etc/smoke-landing/runner.env"
