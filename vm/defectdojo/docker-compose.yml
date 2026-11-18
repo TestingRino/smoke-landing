@@ -1,0 +1,132 @@
+# DefectDojo: findings tracker for smoke-landing. NOT the gate (scripts/evaluate.sh is).
+# Layout follows upstream's docker-compose.yml for the pinned tag. Images come from Docker Hub.
+# Installed to /opt/defectdojo by setup.sh, which writes .env (secrets, version, IP).
+#
+# Network exposure:
+#   docker-compose.yml       -> 127.0.0.1:${DD_PORT}           (the runner on this VM)
+#   docker-compose.iap.yml   -> ${DD_INTERNAL_IP}:${DD_PORT}   (Google IAP TCP forwarding; added via COMPOSE_FILE)
+#   firewall.sh drops traffic from every Docker bridge (builds, scanners) to that port.
+# Memory: ~3.6 GB steady state in total, so builds on this 16 GB VM aren't starved.
+name: ${COMPOSE_PROJECT_NAME:-defectdojo}
+
+x-env: &env
+  DD_DEBUG: "False"
+  DD_DATABASE_URL: "postgresql://defectdojo:${DD_DB_PASSWORD:?}@postgres:5432/defectdojo"
+  DD_CELERY_BROKER_URL: "redis://valkey:6379/0"
+  DD_CACHE_URL: "redis://valkey:6379/1"
+  DD_SECRET_KEY: "${DD_SECRET_KEY:?}"
+  DD_CREDENTIAL_AES_256_KEY: "${DD_CREDENTIAL_AES_256_KEY:?}"
+  DD_ALLOWED_HOSTS: "localhost,127.0.0.1,${DD_INTERNAL_IP:-127.0.0.1}"
+  DD_SITE_URL: "${DD_SITE_URL:-http://localhost:8088}"
+  DD_DATABASE_READINESS_TIMEOUT: "60"
+  DD_UWSGI_NUM_OF_PROCESSES: "2"
+  DD_UWSGI_NUM_OF_THREADS: "4"
+
+x-image: &image "defectdojo/defectdojo-django:${DD_VERSION:?}"
+
+services:
+  initializer:
+    image: *image
+    entrypoint: ["/entrypoint-initializer.sh"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      <<: *env
+      DD_INITIALIZE: "true"
+      DD_ADMIN_USER: admin
+      DD_ADMIN_MAIL: admin@localhost
+      DD_ADMIN_FIRST_NAME: Admin
+      DD_ADMIN_LAST_NAME: User
+      # Set here (from .env) so the initializer never prints a generated password into logs.
+      DD_ADMIN_PASSWORD: "${DD_ADMIN_PASSWORD:?}"
+    mem_limit: 1g
+    networks: [dojo]
+
+  uwsgi:
+    image: *image
+    entrypoint: ["/entrypoint-uwsgi.sh"]
+    restart: unless-stopped
+    depends_on:
+      initializer: { condition: service_completed_successfully }
+      valkey: { condition: service_started }
+    environment: *env
+    volumes:
+      - media:/app/media
+    mem_limit: 1200m
+    networks: [dojo]
+
+  celerybeat:
+    image: *image
+    entrypoint: ["/entrypoint-celery-beat.sh"]
+    restart: unless-stopped
+    depends_on:
+      initializer: { condition: service_completed_successfully }
+      valkey: { condition: service_started }
+    environment: *env
+    mem_limit: 256m
+    networks: [dojo]
+
+  celeryworker:
+    image: *image
+    entrypoint: ["/entrypoint-celery-worker.sh"]
+    restart: unless-stopped
+    depends_on:
+      initializer: { condition: service_completed_successfully }
+      valkey: { condition: service_started }
+    environment: *env
+    volumes:
+      - media:/app/media
+    mem_limit: 768m
+    networks: [dojo]
+
+  nginx:
+    image: "defectdojo/defectdojo-nginx:${DD_VERSION:?}"
+    restart: unless-stopped
+    depends_on:
+      uwsgi: { condition: service_started }
+    environment:
+      DD_UWSGI_HOST: uwsgi
+      DD_UWSGI_PORT: "3031"
+    volumes:
+      - media:/usr/share/nginx/html/media
+    ports:
+      - "127.0.0.1:${DD_PORT:-8088}:8080"
+    mem_limit: 128m
+    networks: [dojo]
+
+  postgres:
+    image: "postgres:${DD_POSTGRES_VERSION:-17.10-alpine}"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: defectdojo
+      POSTGRES_USER: defectdojo
+      POSTGRES_PASSWORD: "${DD_DB_PASSWORD:?}"
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U defectdojo -d defectdojo"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    mem_limit: 1g
+    networks: [dojo]
+
+  valkey:
+    image: "valkey/valkey:${DD_VALKEY_VERSION:-8.1.11-alpine}"
+    restart: unless-stopped
+    volumes:
+      - valkey:/data
+    mem_limit: 256m
+    networks: [dojo]
+
+volumes:
+  postgres:
+  media:
+  valkey:
+
+networks:
+  dojo:
+    driver: bridge
+    driver_opts:
+      # Fixed bridge name so firewall.sh can tell DefectDojo's own traffic from build/scanner bridges.
+      com.docker.network.bridge.name: "${DD_BRIDGE:-br-dojo}"

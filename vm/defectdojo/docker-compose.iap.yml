@@ -1,0 +1,7 @@
+# Adds the listener on the VM's internal IP that Google IAP TCP forwarding connects to.
+# Only the IAP range (35.235.240.0/20) may reach it through the VPC firewall (gcp/defectdojo.sh firewall),
+# and firewall.sh blocks it from every Docker bridge on the VM.
+services:
+  nginx:
+    ports:
+      - "${DD_INTERNAL_IP:?}:${DD_PORT:-8088}:8080"

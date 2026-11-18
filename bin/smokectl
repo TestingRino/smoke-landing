@@ -17,6 +17,12 @@ smokectl <command> [args]
   runs    [repo]          recent pipeline runs
   status                  live smoke apps and URLs (needs gcloud)
   secrets <repo>          where to put this app's API keys/credentials in Infisical
+
+DefectDojo (findings tracker on the VM, reached through Google IAP; see README "DefectDojo"):
+  grant-dojo  <email>     let a teammate open DefectDojo (IAP tunnel to port $DEFECTDOJO_PORT only; no SSH, no VM admin)
+  revoke-dojo <email>     remove that access
+  dojo-tunnel             open the tunnel yourself, then browse $DEFECTDOJO_UI_URL
+  dojo-status             health of DefectDojo on the VM (over SSH; needs your VM access)
 EOF
 }
 
@@ -41,5 +47,36 @@ Shared keys (e.g. one OPENAI_API_KEY for many apps): put them in /_shared and ad
 "secret import" of /_shared into $p.  Changes apply on the next deploy: smokectl deploy $r
 EOF
             ;;
+  grant-dojo)
+    e="${1:?email}"; vm="projects/$GCP_PROJECT/zones/$VM_ZONE/instances/$VM_NAME"
+    # IAP tunnel to the DefectDojo port ONLY (not 22: no SSH through IAP)
+    gcloud projects add-iam-policy-binding "$GCP_PROJECT" --quiet --member "user:$e" --role roles/iap.tunnelResourceAccessor \
+      --condition "expression=destination.port == $DEFECTDOJO_PORT,title=defectdojo-iap-port-only" >/dev/null
+    # gcloud looks the VM up by name before tunnelling: compute.instances.get on this one VM
+    gcloud projects add-iam-policy-binding "$GCP_PROJECT" --quiet --member "user:$e" \
+      --role "projects/$GCP_PROJECT/roles/smokeDojoTunnel" \
+      --condition "expression=resource.name == '$vm',title=defectdojo-vm-lookup" >/dev/null
+    cat <<MSG
+Granted $e IAP access to DefectDojo (port $DEFECTDOJO_PORT only). Send them:
+  1. Install the Google Cloud SDK (Windows: "Google Cloud SDK Shell"), then run once:  gcloud auth login
+  2. Each time:  gcloud compute start-iap-tunnel $VM_NAME $DEFECTDOJO_PORT --local-host-port=localhost:$DEFECTDOJO_PORT --zone $VM_ZONE --project $GCP_PROJECT
+  3. Leave that window open and browse $DEFECTDOJO_UI_URL
+They also need a DefectDojo login: on the VM run  sudo $DEFECTDOJO_DIR/add-user.sh $e
+MSG
+    ;;
+  revoke-dojo)
+    e="${1:?email}"
+    for r in roles/iap.tunnelResourceAccessor "projects/$GCP_PROJECT/roles/smokeDojoTunnel"; do
+      if gcloud projects remove-iam-policy-binding "$GCP_PROJECT" --quiet --member "user:$e" --role "$r" --all >/dev/null 2>&1; then
+        echo "removed $r"; else echo "no $r binding for $e"; fi
+    done
+    echo "Also deactivate their DefectDojo login (Users page, as admin) if they shouldn't sign in again." ;;
+  dojo-tunnel)
+    echo "Tunnel open while this runs; browse $DEFECTDOJO_UI_URL (Ctrl+C to close)."
+    gcloud compute start-iap-tunnel "$VM_NAME" "$DEFECTDOJO_PORT" --local-host-port="localhost:$DEFECTDOJO_PORT" \
+      --zone "$VM_ZONE" --project "$GCP_PROJECT" ;;
+  dojo-status)
+    if [[ -x "$DEFECTDOJO_DIR/status.sh" ]]; then sudo "$DEFECTDOJO_DIR/status.sh"
+    else gcloud compute ssh "$VM_NAME" --zone "$VM_ZONE" --project "$GCP_PROJECT" --command "sudo $DEFECTDOJO_DIR/status.sh"; fi ;;
   *) usage; [[ -z "$cmd" ]] || exit 1 ;;
 esac
