@@ -1,29 +1,84 @@
 #!/usr/bin/env bash
-# smokectl: operator CLI (run from your laptop; needs `gh auth login`, optionally gcloud).
+# smokectl: operator CLI. Plain bash: runs in Git Bash or WSL on Windows, in Cloud Shell, or on the VM.
+# Needs `gh auth login` (GitHub) and `gcloud auth login` (Google Cloud) for the commands that use them.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck source=../smoke.config.env
-source "$ROOT/smoke.config.env"
+# lib.sh: smoke.config.env + name helpers (slug, label_val, ...). It does NOT need runner.env.
+# shellcheck source=../scripts/lib.sh
+source "$ROOT/scripts/lib.sh"
 CTRL="$OWNER/$CONTROL_REPO_NAME"
+G=(--project "$GCP_PROJECT" --quiet)
 
 usage() {
   cat <<EOF
 smokectl <command> [args]
 
-  enable  <repo>          opt a repo in (adds topic '$OPT_IN_TOPIC'; poller deploys every new default-branch commit)
-  disable <repo>          opt a repo out (removes topic; does not tear down)
-  deploy  <repo> [ref]    run gate + deploy now (ref = branch/tag/sha; default branch if omitted)
-  teardown <repo>         delete the Cloud Run service, its GCP secrets, runtime SA and images
-  runs    [repo]          recent pipeline runs
-  status                  live smoke apps and URLs (needs gcloud)
-  secrets <repo>          where to put this app's API keys/credentials in Infisical
+Pipeline
+  enable  <repo>                 opt a repo in (topic '$OPT_IN_TOPIC'; every new default-branch commit is gated + staged)
+  disable <repo>                 opt a repo out (removes the topic; does not tear down)
+  deploy  <repo> [ref]           run gate + staging now (ref = branch/tag/sha; default branch if omitted)
+  runs    [repo]                 recent pipeline runs
+  status                         live staging apps and URLs
+  teardown <repo>                delete the staging service, runtime SA and staging images (secrets are kept)
 
-DefectDojo (findings tracker on the VM, reached through Google IAP; see README "DefectDojo"):
-  grant-dojo  <email>     let a teammate open DefectDojo (IAP tunnel to port $DEFECTDOJO_PORT only; no SSH, no VM admin)
-  revoke-dojo <email>     remove that access
-  dojo-tunnel             open the tunnel yourself, then browse $DEFECTDOJO_UI_URL
-  dojo-status             health of DefectDojo on the VM (over SSH; needs your VM access)
+Release (staging -> release registry the boundary pulls from)
+  release  <repo> <sha> "<why>"  promote a commit that passed staging (verified, signed, recorded)
+  releases [repo]                released images + the exact boundary reference (@sha256:...)
+
+Secrets (Google Secret Manager; values are typed hidden and never printed)
+  secret set  <repo> KEY         add/replace an app secret (env var KEY in staging)
+  secret set  --shared KEY       add/replace a shared secret (apps opt in via .smoke.yml shared_secrets)
+  secret list <repo>|--shared    names and last update, never values
+  secret rm   <repo> KEY         delete an app secret
+  grant-secrets  <email>         let a teammate add/rotate secrets without being able to read them
+  revoke-secrets <email>
+
+DefectDojo (findings tracker on the VM, reached through Google IAP)
+  grant-dojo  <email>            IAP tunnel to port $DEFECTDOJO_PORT only (no SSH, no VM admin)
+  revoke-dojo <email>
+  dojo-tunnel                    open the tunnel yourself, then browse $DEFECTDOJO_UI_URL
+  dojo-status                    health of DefectDojo on the VM (over SSH)
 EOF
+}
+
+valid_key()  { [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && "$1" != PORT && "$1" != K_* ]] || die "KEY must be an env var name (not PORT or K_*): '$1'"; }
+secret_ref() {   # <repo>|--shared KEY -> sets SNAME SLABELS
+  if [[ "$1" == --shared ]]; then SNAME="smoke-shared-$2"; SLABELS="managed-by=smoke-landing,smoke-shared=true"
+  else validate_repo "$1"; SNAME="$(secret_name "$1" "$2")"; SLABELS="managed-by=smoke-landing,smoke-app=$(label_val "$1")"; fi
+}
+
+secret_cmd() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    set)
+      local who="${1:?repo or --shared}" key="${2:?KEY}" val=""; valid_key "$key"; secret_ref "$who" "$key"
+      if [[ -t 0 ]]; then
+        read -rs -p "Value for $key (hidden): " val; echo >&2
+        local again; read -rs -p "Again: " again; echo >&2
+        [[ "$val" == "$again" ]] || die "values differ"
+      else
+        IFS= read -r -d '' val || true    # piped in, e.g. from a password manager CLI
+        val="${val%$'\n'}"
+      fi
+      [[ -n "$val" ]] || die "empty value"
+      gcloud secrets describe "$SNAME" "${G[@]}" >/dev/null 2>&1 || \
+        gcloud secrets create "$SNAME" "${G[@]}" --replication-policy automatic --labels "$SLABELS" >/dev/null
+      printf '%s' "$val" | gcloud secrets versions add "$SNAME" "${G[@]}" --data-file=- >/dev/null
+      unset val
+      echo "Saved $SNAME. It reaches staging on the next deploy$([[ "$who" == --shared ]] && echo " of apps listing $key under shared_secrets in .smoke.yml" || echo ": smokectl deploy $who")."
+      ;;
+    list)
+      local who="${1:?repo or --shared}" filter
+      if [[ "$who" == --shared ]]; then filter="labels.smoke-shared=true"; else validate_repo "$who"; filter="labels.smoke-app=$(label_val "$who")"; fi
+      gcloud secrets list "${G[@]}" --filter "$filter" --format "table(name.basename():label=SECRET, createTime.date(tz=LOCAL):label=CREATED)"
+      echo "(Values are never shown. Version history: gcloud secrets versions list <SECRET> --project $GCP_PROJECT)"
+      ;;
+    rm)
+      local who="${1:?repo}" key="${2:?KEY}"; valid_key "$key"; secret_ref "$who" "$key"
+      read -r -p "Delete $SNAME and all its versions? [y/N] " a; [[ "$a" == [yY] ]] || exit 0
+      gcloud secrets delete "$SNAME" "${G[@]}" ;;
+    *) usage; exit 1 ;;
+  esac
 }
 
 cmd="${1:-}"; shift || true
@@ -32,21 +87,30 @@ case "$cmd" in
   disable)  gh repo edit "$OWNER/${1:?repo}" --remove-topic "$OPT_IN_TOPIC" ;;
   deploy)   gh workflow run deploy.yml -R "$CTRL" -f repo="${1:?repo}" -f ref="${2:-}" && echo "dispatched; watch: gh run watch -R $CTRL" ;;
   teardown) gh workflow run teardown.yml -R "$CTRL" -f repo="${1:?repo}" ;;
-  runs)     if [[ -n "${1:-}" ]]; then gh run list -R "$CTRL" -w deploy.yml -L 50 | grep -F "smoke: $1 " || true
-            else gh run list -R "$CTRL" -w deploy.yml -L 20; fi ;;
-  status)   gcloud run services list --project "$GCP_PROJECT" --region "$GCP_REGION" \
+  runs)     if [[ -n "${1:-}" ]]; then gh run list -R "$CTRL" -L 50 | grep -E "(smoke|release): $1 " || true
+            else gh run list -R "$CTRL" -L 20; fi ;;
+  status)   gcloud run services list "${G[@]}" --region "$GCP_REGION" \
               --filter="metadata.labels.managed-by=smoke-landing" \
               --format="table(metadata.name, metadata.labels.commit, status.url, metadata.labels.deployed-at.date(tz=LOCAL))" ;;
-  secrets)  r="${1:?repo}"; p="/$(echo "$r" | sed -E 's/[^A-Za-z0-9_-]/-/g')"
-            cat <<EOF
-Infisical UI: $INFISICAL_UI_URL   (ssh -L 8080:localhost:8080 <vm>)
-  Project:     $INFISICAL_PROJECT_ID
-  Environment: $INFISICAL_ENV
-  Folder:      $p          <- create it and add KEY=value pairs (env-var style names)
-Shared keys (e.g. one OPENAI_API_KEY for many apps): put them in /_shared and add a
-"secret import" of /_shared into $p.  Changes apply on the next deploy: smokectl deploy $r
-EOF
-            ;;
+
+  release)
+    r="${1:?repo}"; sha="${2:?commit sha}"; why="${3:?justification in quotes}"
+    gh workflow run release.yml -R "$CTRL" -f repo="$r" -f commit="$sha" -f justification="$why" \
+      && echo "dispatched; watch: gh run watch -R $CTRL   (the run summary shows the boundary reference)" ;;
+  releases)
+    path="$(ar_host)/$GCP_PROJECT/$RELEASE_REPO"; [[ -n "${1:-}" ]] && path+="/$(slug "$1")"
+    gcloud artifacts docker images list "$path" "${G[@]}" --include-tags \
+      --format="table[no-heading](package.basename():label=APP, tags.list():label=COMMIT, createTime.date(tz=LOCAL):label=RELEASED, format('{0}@{1}', package, version):label=BOUNDARY_REFERENCE)" ;;
+
+  secret) secret_cmd "$@" ;;
+  grant-secrets)
+    gcloud projects add-iam-policy-binding "$GCP_PROJECT" --quiet --member "user:${1:?email}" \
+      --role "projects/$GCP_PROJECT/roles/smokeSecretWriter" --condition=None >/dev/null
+    echo "Granted ${1}: can create/rotate smoke secrets with 'smokectl secret set', cannot read values." ;;
+  revoke-secrets)
+    gcloud projects remove-iam-policy-binding "$GCP_PROJECT" --quiet --member "user:${1:?email}" \
+      --role "projects/$GCP_PROJECT/roles/smokeSecretWriter" --all >/dev/null && echo "revoked" ;;
+
   grant-dojo)
     e="${1:?email}"; vm="projects/$GCP_PROJECT/zones/$VM_ZONE/instances/$VM_NAME"
     # IAP tunnel to the DefectDojo port ONLY (not 22: no SSH through IAP)
@@ -78,5 +142,6 @@ MSG
   dojo-status)
     if [[ -x "$DEFECTDOJO_DIR/status.sh" ]]; then sudo "$DEFECTDOJO_DIR/status.sh"
     else gcloud compute ssh "$VM_NAME" --zone "$VM_ZONE" --project "$GCP_PROJECT" --command "sudo $DEFECTDOJO_DIR/status.sh"; fi ;;
-  *) usage; [[ -z "$cmd" ]] || exit 1 ;;
+  -h|--help|help|"") usage ;;
+  *) usage; exit 1 ;;
 esac
