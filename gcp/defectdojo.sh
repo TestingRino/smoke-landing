@@ -32,9 +32,19 @@ firewall() {
       --source-ranges "$IAP_RANGE" --allow "tcp:$PORT" --target-tags "$VM_DOJO_TAG" \
       --description "DefectDojo via Google IAP TCP forwarding only (smoke-landing)"
   fi
-  say "check: rules open to the whole internet (none may allow tcp:$PORT or 'all')"
-  gcloud compute firewall-rules list "${G[@]}" --filter="direction=INGRESS AND sourceRanges:0.0.0.0/0" \
-    --format='table(name,allowed[].map().firewall_rule().list():label=ALLOW,targetTags.list():label=TARGET_TAGS)'
+  say "check: no enabled ingress rule may open tcp:$PORT (or all ports) to the whole internet"
+  # Filtered with jq: gcloud can't turn a sourceRanges filter into a server-side query.
+  local open
+  open="$(gcloud compute firewall-rules list "${G[@]}" --format=json | jq -r --arg p "$PORT" '
+    .[] | select(.direction == "INGRESS" and (.disabled | not) and ((.sourceRanges // []) | index("0.0.0.0/0")))
+        | select(any(.allowed[]?; .IPProtocol == "all"
+              or (.IPProtocol == "tcp" and ((.ports // []) | length == 0
+                  or any(.[]; . == $p or (test("-") and (split("-") | (.[0] | tonumber) <= ($p | tonumber) and ($p | tonumber) <= (.[1] | tonumber))))))))
+        | "\(.name)  targets: \((.targetTags // ["ALL instances"]) | join(","))"')"
+  if [[ -n "$open" ]]; then
+    echo "FAIL: these rules expose tcp:$PORT to the internet:"; echo "$open"; return 1
+  fi
+  echo "OK: tcp:$PORT is only reachable from Google IAP ($IAP_RANGE)"
 }
 
 role() {
