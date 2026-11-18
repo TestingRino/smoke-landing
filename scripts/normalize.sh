@@ -16,6 +16,10 @@ jq -n \
   --slurpfile tf "$REP/trivy-fs.json" \
   --slurpfile ti "$REP/trivy-image.json" '
   def sev_sg: if . == "ERROR" then "HIGH" elif . == "WARNING" then "MEDIUM" else "LOW" end;
+  # Key anchor for a semgrep result: the matched code (stable when lines shift) when semgrep reports it;
+  # newer semgrep versions redact it to "requires login" (or omit it): fall back to the line number.
+  def sg_anchor: (.extra.lines // "" | gsub("\\s+";" ") | .[0:200]) as $l
+    | if ($l == "" or ($l | test("^ *requires login *$"))) then "line:\(.start.line)" else $l end;
   [
     ($gl[0][]? | {kind:"secret", severity:"CRITICAL", rule:.RuleID,
         title:"Secret in git history: \(.RuleID)", location:"\(.File):\(.StartLine)",
@@ -30,7 +34,7 @@ jq -n \
         key:"image-secret|\(.RuleID)|\($t)"}),
     ($sg[0].results[]? | {kind:"sast", severity:(.extra.severity|sev_sg), rule:.check_id,
         title:"\(.check_id | split(".") | last)", location:"\(.path | sub("^/src/";"")):\(.start.line)",
-        detail:(.extra.message // "" | .[0:600]), key:"sast|\(.check_id)|\(.path)|\(.extra.lines // "" | gsub("\\s+";" ") | .[0:200])"}),
+        detail:(.extra.message // "" | .[0:600]), key:"sast|\(.check_id)|\(.path)|\(sg_anchor)"}),
     ($ti[0].Results[]? | .Target as $t | .Vulnerabilities[]? | {kind:"vuln", severity:.Severity, rule:.VulnerabilityID,
         title:"\(.VulnerabilityID) in \(.PkgName) \(.InstalledVersion)", location:$t,
         fixed:(.FixedVersion // ""),

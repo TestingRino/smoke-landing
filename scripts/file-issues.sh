@@ -17,7 +17,7 @@ ensure_label smoke-gate b60205
 for s in critical high medium; do ensure_label "severity:$s" d93f0b; done
 
 # Existing open smoke-gate issues: fp -> issue number
-declare -A open_issue
+declare -A open_issue=()
 while IFS=$'\t' read -r num fp; do [[ -n "$fp" ]] && open_issue[$fp]=$num; done < <(
   api --paginate "repos/$OWNER/$REPO/issues?state=open&labels=smoke-gate&per_page=100" \
     | jq -r '.[] | select(.pull_request|not) | [.number, ((.body // "") | capture("smoke-gate:fp=(?<f>[0-9a-f]+)").f // "")] | @tsv')
@@ -30,7 +30,7 @@ current=$(jq -c --argjson pub "$public" '
         detail:"The DevSecOps gate found one or more credentials. Details are withheld because this repository is public. Open the gate run (maintainers only), rotate every listed credential, and purge it from git history."}
      else . end] | unique_by(.fp)' "$F")
 
-declare -A seen; created=0; skipped=0
+declare -A seen=(); created=0; skipped=0
 while IFS= read -r f; do
   fp=$(jq -r .fp <<< "$f"); seen[$fp]=1
   if [[ -n "${open_issue[$fp]:-}" ]]; then
