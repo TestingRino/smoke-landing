@@ -39,103 +39,117 @@ boundary team: [`boundary/README.md`](boundary/README.md)
 | **No long-lived cloud keys** | GitHub OIDC → Workload Identity Federation, limited to `TestingRino/smoke-landing` on `main`. |
 | **No new subscriptions** | Pay-per-use only: KMS ≈ $0.06/month, Secret Manager ≈ $0.06/secret/month, DefectDojo backups < $1/month, IAP free. |
 
-## Operator steps for this version (in order)
+## Setting up the DevSecOps VM from scratch
 
-You run these one at a time. Each block is a single command, with what to expect after it.
+Already done once per project: `./gcp/bootstrap.sh testingrino-smoke us-central1 TestingRino smoke-landing` in
+Cloud Shell (Workload Identity, registries, KMS signing key, roles). Re-running it is safe.
 
-**1. In Cloud Shell, get this branch:**
+You run the steps below one at a time. Each block is a single command; the text after it says what to expect.
+Steps A-C run in **Cloud Shell**, D-I **on the VM** (over SSH), J back in Cloud Shell.
+
+**A. Cloud Shell: get the branch**
 ```bash
 cd ~/smoke-landing && git fetch origin devsecops-pipeline && git checkout devsecops-pipeline && git pull
 ```
 
-**2. Add the signing key, release registry and roles** (safe to re-run):
+**B. Cloud Shell: check the VM exists**
 ```bash
-./gcp/bootstrap.sh testingrino-smoke us-central1 TestingRino smoke-landing
+gcloud compute instances describe smoke-devsecops --zone us-central1-a --project testingrino-smoke --format='value(status,machineType.basename(),disks[0].diskSizeGb)'
 ```
-It ends with `SIGNING PUBLIC KEY` and a `-----BEGIN PUBLIC KEY-----` block. **Paste that block back to Claude** (it's
-public). It gets committed as `keys/smoke-landing-signing.pub`, which the boundary pins.
+Expect `RUNNING  e2-standard-4  100`. If it says the VM was not found, create it (Ubuntu 24.04, no service account yet):
+```bash
+gcloud compute instances create smoke-devsecops --zone us-central1-a --project testingrino-smoke --machine-type e2-standard-4 --image-family ubuntu-2404-lts-amd64 --image-project ubuntu-os-cloud --boot-disk-size 100GB --boot-disk-type pd-balanced --no-service-account --no-scopes
+```
 
-**3. Update the GitHub token:** GitHub → Settings → Developer settings → Fine-grained tokens → your smoke token → add
-**Issues: Read and write** (keep Contents read, Metadata read, Commit statuses read/write). Nothing to change on the VM.
+**C. Cloud Shell: IAP firewall rule, tunnel role, backup bucket, backup service account.**
+Done first, while nothing runs on the VM yet, because `backup-sa` stops and restarts it.
+```bash
+./gcp/defectdojo.sh firewall
+```
+Expect a rule `allow-iap-defectdojo` (35.235.240.0/20 → tcp:8088). The final table must not show `tcp:8088` or `all`.
+```bash
+./gcp/defectdojo.sh role
+```
+```bash
+./gcp/defectdojo.sh bucket
+```
+Expect uniform access, `public_access_prevention: enforced`, 30-day retention, delete at 90 days.
+```bash
+./gcp/defectdojo.sh backup-sa
+```
+Answer `y` when it asks to stop the VM. Expect it to stop, attach `smoke-dojo-backup`, and start again.
 
-**4. On the VM, retire Infisical** (it held no app secrets):
-```bash
-sudo docker compose -f /home/smoke/infisical/docker-compose.yml down -v
-```
-```bash
-sudo rm -rf /home/smoke/infisical
-```
-```bash
-sudo ss -ltnp | grep -E ':8080|:8088' || echo "8080 and 8088 are free"
-```
-Expect: `8080 and 8088 are free`.
+**D. Get a GitHub token** (once, in the browser): GitHub → Settings → Developer settings → Fine-grained tokens →
+Generate. Resource owner `TestingRino`, **All repositories**, permissions **Contents: read, Metadata: read,
+Commit statuses: read & write, Issues: read & write**. Keep it open; you'll paste it twice.
 
-**5. On the VM, update the code and install cosign** (runner re-registration isn't needed):
+**E. VM: connect, then clone this repo** (the password prompt wants the token from D, not your GitHub password):
 ```bash
-cd ~/smoke-landing && git fetch origin devsecops-pipeline && git checkout devsecops-pipeline && git pull
+gcloud compute ssh smoke-devsecops --zone us-central1-a --project testingrino-smoke
 ```
 ```bash
-sudo ./vm/bootstrap.sh
+git clone --branch devsecops-pipeline https://github.com/TestingRino/smoke-landing.git ~/smoke-landing && cd ~/smoke-landing
 ```
-Expect it to end with `VM bootstrap complete`.
+Expect `Cloning into …` and no errors. The username is `TestingRino`; the password is the token.
 
-**6. On the VM, install DefectDojo** (~10 minutes the first time):
+**F. VM: install Docker, gcloud, cosign and the GitHub runner.** First get a runner registration token
+(valid 1 hour): GitHub → TestingRino/smoke-landing → Settings → Actions → Runners → **New self-hosted runner**,
+copy the value after `--token` in the "Configure" box. Then:
+```bash
+sudo RUNNER_TOKEN=<paste-runner-token> CONTROL_REPO=TestingRino/smoke-landing ./vm/bootstrap.sh
+```
+Takes 5-10 minutes. Expect `Registering runner 'devsecops-gate-1'`, then `VM bootstrap complete`.
+On GitHub, the runner shows as **Idle** with the label `devsecops-gate`.
+
+**G. VM: put the GitHub token from D into the runner's credentials file:**
+```bash
+sudo nano /etc/smoke-landing/runner.env
+```
+Paste the token after `GH_APPS_TOKEN=`, save (Ctrl+O, Enter) and exit (Ctrl+X). Leave the DefectDojo lines empty:
+the next step fills them in.
+
+**H. VM: install DefectDojo** (~10 minutes):
 ```bash
 sudo vm/defectdojo/setup.sh
 ```
-Expect 9 lines starting with `PASS` and then `All isolation checks passed.`. **Then store `/opt/defectdojo/.env` in your
-password manager:**
+Expect `runner.env: DEFECTDOJO_TOKEN updated`, then 9 lines starting with `PASS` (the metadata-server check is
+included because the VM now has a service account) and `All isolation checks passed.` If any line says `FAIL`, stop:
+don't give anyone access until it passes. Then store the secrets file in your password manager:
 ```bash
 sudo cat /opt/defectdojo/.env
 ```
 
-**7. In Cloud Shell, open DefectDojo to IAP only:**
-```bash
-./gcp/defectdojo.sh firewall
-```
-Expect a rule `allow-iap-defectdojo` (35.235.240.0/20, tcp:8088). The final table must not show `tcp:8088` or `all`.
-```bash
-./gcp/defectdojo.sh role
-```
-Expect `ok`.
-
-**8. Backups:**
-```bash
-./gcp/defectdojo.sh bucket
-```
-Expect the bucket settings: uniform access, `public_access_prevention: enforced`, 30-day retention, delete at 90 days.
-```bash
-./gcp/defectdojo.sh backup-sa
-```
-This **stops the VM for about 2 minutes** (it asks first). Then, on the VM:
+**I. VM: test a backup, add logins, final check:**
 ```bash
 sudo /opt/defectdojo/backup.sh
 ```
 Expect `uploaded to gs://testingrino-smoke-dojo-backups/defectdojo/<timestamp>/`.
-
-**9. Give the team access** (in Cloud Shell, one per person):
-```bash
-bin/smokectl grant-dojo ltruax@stephensonstellar.org
-```
-```bash
-bin/smokectl grant-dojo smacewan@stephensonstellar.org
-```
-And their DefectDojo logins (on the VM; each prints a one-time password to give them privately):
 ```bash
 sudo /opt/defectdojo/add-user.sh ltruax@stephensonstellar.org
 ```
 ```bash
 sudo /opt/defectdojo/add-user.sh smacewan@stephensonstellar.org
 ```
-
-**10. Add staging secrets** (Git Bash, WSL or Cloud Shell; the value is typed hidden):
+Each prints a one-time password to give that person privately.
 ```bash
-bin/smokectl secret set <repo> OPENAI_API_KEY
+sudo /opt/defectdojo/status.sh
 ```
+Expect `web UP`, all services `running`, `firewall active`, a `last-backup` timestamp.
 
-**11. Merge `devsecops-pipeline` → `main` when you're ready.** Until then, workflows started from the branch **can't**
-log in to GCP, because the Workload Identity condition only allows `refs/heads/main`. To test from the branch first,
-ask for a temporary second provider limited to `refs/heads/devsecops-pipeline` and remove it afterwards.
+**J. Cloud Shell: tunnel access for the team:**
+```bash
+bin/smokectl grant-dojo ltruax@stephensonstellar.org
+```
+```bash
+bin/smokectl grant-dojo smacewan@stephensonstellar.org
+```
+Then open the tunnel yourself (`bin/smokectl dojo-tunnel`), browse http://localhost:8088, log in as `admin` with
+`DD_ADMIN_PASSWORD` from `/opt/defectdojo/.env`, and change that password (user menu → Change password).
+
+**Afterwards:** add staging secrets (`bin/smokectl secret set <repo> KEY`), and merge `devsecops-pipeline` → `main`
+when you're ready. Until the merge, workflows started from the branch **can't** log in to GCP, because the
+Workload Identity condition only allows `refs/heads/main`. To test from the branch first, ask for a temporary second
+provider limited to `refs/heads/devsecops-pipeline` and remove it afterwards.
 
 ## Daily use (`bin/smokectl`)
 
