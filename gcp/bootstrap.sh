@@ -38,11 +38,18 @@ bind gcloud artifacts repositories add-iam-policy-binding "$AR_REPO" "${G[@]}" -
 # NOTE: the owner name is compared CASE-SENSITIVELY: use the exact GitHub spelling (e.g. TestingRino).
 gcloud iam workload-identity-pools describe "$POOL" "${G[@]}" --location global >/dev/null 2>&1 || \
   gcloud iam workload-identity-pools create "$POOL" "${G[@]}" --location global --display-name "smoke-landing"
-gcloud iam workload-identity-pools providers describe "$PROVIDER" "${G[@]}" --location global --workload-identity-pool "$POOL" >/dev/null 2>&1 || \
+# Create the provider, or bring an existing one's rule up to date (an old rule silently rejects every run:
+# "The given credential is rejected by the attribute condition").
+WIF_MAP="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref"
+WIF_COND="assertion.repository == '$GH_OWNER/$CTRL' && assertion.ref == 'refs/heads/main'"
+if gcloud iam workload-identity-pools providers describe "$PROVIDER" "${G[@]}" --location global --workload-identity-pool "$POOL" >/dev/null 2>&1; then
+  gcloud iam workload-identity-pools providers update-oidc "$PROVIDER" "${G[@]}" --location global --workload-identity-pool "$POOL" \
+    --attribute-mapping "$WIF_MAP" --attribute-condition "$WIF_COND" >/dev/null
+else
   gcloud iam workload-identity-pools providers create-oidc "$PROVIDER" "${G[@]}" --location global --workload-identity-pool "$POOL" \
-    --issuer-uri "https://token.actions.githubusercontent.com" \
-    --attribute-mapping "google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref" \
-    --attribute-condition "assertion.repository == '$GH_OWNER/$CTRL' && assertion.ref == 'refs/heads/main'"
+    --issuer-uri "https://token.actions.githubusercontent.com" --attribute-mapping "$WIF_MAP" --attribute-condition "$WIF_COND"
+fi
+echo "Workload Identity rule: $(gcloud iam workload-identity-pools providers describe "$PROVIDER" "${G[@]}" --location global --workload-identity-pool "$POOL" --format='value(attributeCondition)')"
 bind gcloud iam service-accounts add-iam-policy-binding "$SA" "${G[@]}" --role roles/iam.workloadIdentityUser \
   --member "principalSet://iam.googleapis.com/projects/$NUM/locations/global/workloadIdentityPools/$POOL/attribute.repository/$GH_OWNER/$CTRL"
 
