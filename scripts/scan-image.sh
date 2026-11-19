@@ -19,5 +19,14 @@ docker run --rm --user "$DU" -v "$WORK:/work:ro" -v "$REP:/out" -v "$TRIVY_CACHE
   "$TRIVY_IMAGE" "${tv[@]}"
 
 log "syft SBOM"
-docker run --rm --network none --user "$DU" -v "$WORK:/work:ro" -v "$REP:/out" \
-  "$SYFT_IMAGE" docker-archive:/work/image.tar -o spdx-json=/out/sbom.spdx.json -q
+# Non-root syft needs a writable /tmp to unpack the image (the syft image's own /tmp isn't), and no network:
+# the update check is off. Its output goes to a log that is shown if it fails.
+rc=0
+docker run --rm --network none --user "$DU" --tmpfs /tmp:rw,exec,mode=1777,size=8g \
+  -e HOME=/tmp -e SYFT_CHECK_FOR_APP_UPDATE=false -v "$WORK:/work:ro" -v "$REP:/out" \
+  "$SYFT_IMAGE" docker-archive:/work/image.tar -o spdx-json=/out/sbom.spdx.json >/dev/null 2>"$WORK/syft.log" || rc=$?
+if (( rc != 0 )) || ! jq -e '.spdxVersion' "$REP/sbom.spdx.json" >/dev/null 2>&1; then
+  echo "---- syft output (last 20 lines) ----" >&2; tail -n 20 "$WORK/syft.log" >&2
+  die "syft produced no valid SBOM (exit $rc): see the syft output above"
+fi
+log "SBOM: $(jq '.packages | length' "$REP/sbom.spdx.json") packages"
