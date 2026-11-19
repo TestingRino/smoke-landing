@@ -9,7 +9,9 @@
 #   DOCKER-USER (forwarded traffic, i.e. container -> published port after DNAT, container -> container):
 #     anything from a Docker bridge other than DefectDojo's own whose original destination port is DD_PORT -> DROP
 #     anything from a Docker bridge other than DefectDojo's own into DefectDojo's bridge              -> DROP
-#     anything from any Docker bridge to 169.254.169.254 (metadata server)                             -> DROP
+#     anything from any Docker bridge to 169.254.169.254 (metadata server), EXCEPT DNS (port 53)       -> DROP
+#       (on GCE the metadata server is also the VM's DNS resolver; containers must still resolve names,
+#        while the service-account token, served over HTTP, stays out of reach)
 #   INPUT (host sockets, e.g. docker-proxy or a host-network listener):
 #     Docker bridge -> tcp/DD_PORT -> DROP
 # Traffic from the VM's NIC (Google IAP) and from host processes (the runner) is untouched.
@@ -37,7 +39,10 @@ apply() {
   for br in docker0 'br-+'; do
     iptables -A "$FWD" -i "$br" -p tcp -m conntrack --ctorigdstport "$PORT" -j DROP
     iptables -A "$FWD" -i "$br" -o "$DOJO_BR" -j DROP
-    [[ "$BLOCK_METADATA" == true ]] && iptables -A "$FWD" -i "$br" -d 169.254.169.254 -j DROP
+    if [[ "$BLOCK_METADATA" == true ]]; then
+      for proto in udp tcp; do iptables -A "$FWD" -i "$br" -d 169.254.169.254 -p "$proto" --dport 53 -j RETURN; done
+      iptables -A "$FWD" -i "$br" -d 169.254.169.254 -j DROP
+    fi
   done
   iptables -A "$FWD" -j RETURN
   ensure_jump DOCKER-USER "$FWD"
@@ -45,7 +50,10 @@ apply() {
   # --- traffic to host sockets ---
   for br in docker0 'br-+'; do
     iptables -A "$INP" -i "$br" -p tcp --dport "$PORT" -j DROP
-    [[ "$BLOCK_METADATA" == true ]] && iptables -A "$INP" -i "$br" -d 169.254.169.254 -j DROP
+    if [[ "$BLOCK_METADATA" == true ]]; then
+      for proto in udp tcp; do iptables -A "$INP" -i "$br" -d 169.254.169.254 -p "$proto" --dport 53 -j RETURN; done
+      iptables -A "$INP" -i "$br" -d 169.254.169.254 -j DROP
+    fi
   done
   iptables -A "$INP" -j RETURN
   ensure_jump INPUT "$INP"
