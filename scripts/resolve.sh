@@ -5,7 +5,14 @@ source "$(dirname "$0")/lib.sh"
 require OWNER GH_APPS_TOKEN REPO
 validate_repo "$REPO"
 
-meta="$(gh_apps api "repos/$OWNER/$REPO")" || die "cannot read $OWNER/$REPO (check GH_APPS_TOKEN scope)"
+if ! meta="$(gh_apps api "repos/$OWNER/$REPO" 2>"${RUNNER_TEMP:-/tmp}/gh.err")"; then
+  why="$(grep -oE 'HTTP [0-9]{3}[^()]*' "${RUNNER_TEMP:-/tmp}/gh.err" | head -1)"
+  case "$why" in
+    "HTTP 404"*) die "cannot read $OWNER/$REPO: $why. The token in runner.env can't see this repo: set it to 'All repositories' (resource owner $OWNER), or check the repo name." ;;
+    "HTTP 401"*) die "cannot read $OWNER/$REPO: $why. The token in runner.env is invalid or expired: replace GH_APPS_TOKEN (sudo nano $SMOKE_RUNNER_ENV)." ;;
+    *) die "cannot read $OWNER/$REPO: ${why:-$(tail -1 "${RUNNER_TEMP:-/tmp}/gh.err")} (check GH_APPS_TOKEN in $SMOKE_RUNNER_ENV)" ;;
+  esac
+fi
 [[ "$(jq -r .archived <<< "$meta")" == "false" ]] || die "$OWNER/$REPO is archived"
 ref="${REF:-$(jq -r .default_branch <<< "$meta")}"
 [[ "$ref" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || die "invalid ref: '$ref'"

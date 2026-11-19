@@ -20,14 +20,21 @@ docker run --rm --network none --user "$DU" \
   -v "$SRC:/src:ro" -v "$REP:/out" "${exc_mount[@]}" "$GITLEAKS_IMAGE" "${gl[@]}"
 
 log "semgrep ($SEMGREP_RULESETS)"
-sg=(semgrep scan --json --output /out/semgrep.json --metrics off --disable-nosem --quiet)
+sg=(semgrep scan --json --output /out/semgrep.json --metrics off --disable-nosem)
 for r in $SEMGREP_RULESETS; do sg+=(--config "$r"); done
 if [[ -f "$EXC/semgrep-exclude-rules.txt" ]]; then
   while IFS= read -r rule; do [[ -n "$rule" && "$rule" != \#* ]] && sg+=(--exclude-rule "$rule"); done < "$EXC/semgrep-exclude-rules.txt"
 fi
 sg+=(/src)
-rc=0; docker run --rm --user "$DU" -e HOME=/tmp -v "$SRC:/src:ro" -v "$REP:/out" "$SEMGREP_IMAGE" "${sg[@]}" || rc=$?
-[[ -s "$REP/semgrep.json" ]] || die "semgrep produced no report (exit $rc)"
+# semgrep's progress and errors go to a log (not --quiet, which also hides errors); shown if it fails
+rc=0; docker run --rm --user "$DU" -e HOME=/tmp -v "$SRC:/src:ro" -v "$REP:/out" "$SEMGREP_IMAGE" "${sg[@]}" \
+  >/dev/null 2>"$WORK/semgrep.log" || rc=$?
+if [[ ! -s "$REP/semgrep.json" ]]; then
+  echo "---- semgrep output (last 25 lines) ----" >&2; tail -n 25 "$WORK/semgrep.log" >&2
+  die "semgrep produced no report (exit $rc): see the semgrep output above"
+fi
+n_err=$(jq '.errors | length' "$REP/semgrep.json" 2>/dev/null || echo 0)
+(( n_err == 0 )) || warn "semgrep reported $n_err non-fatal error(s), e.g. $(jq -r '.errors[0].message // "" | .[0:200]' "$REP/semgrep.json")"
 
 log "trivy fs (deps, IaC/Dockerfile misconfig, secrets)"
 tv=(fs --cache-dir /cache --scanners vuln,misconfig,secret --format json --output /out/trivy-fs.json --exit-code 0 --quiet)
