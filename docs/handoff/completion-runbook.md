@@ -137,12 +137,15 @@ http.createServer((req, res) => {
   "scripts": { "start": "node server.js" }, "dependencies": {} }
 ```
 
-`Dockerfile` (the `npm install` puts dependencies into the image, which is what the gate scans for CVEs)
+`Dockerfile` (the `npm install` puts dependencies into the image, which is what the gate scans for CVEs; npm itself is then
+removed, because the npm bundled in `node:*` images carries HIGH CVEs of its own and the app never needs it at runtime)
 ```dockerfile
 FROM node:22-alpine
 WORKDIR /app
 COPY package.json server.js ./
-RUN npm install --omit=dev --no-audit --no-fund
+RUN npm install --omit=dev --no-audit --no-fund \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /opt/yarn* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 USER node
 EXPOSE 8080
 CMD ["node", "server.js"]
@@ -163,7 +166,9 @@ max_instances: 1
 - [ ] Open that URL. Expect `smoke-hello: no secret`.
 - [ ] DefectDojo (tunnel open, http://localhost:8088): product **smoke-hello** with tests `gitleaks`, `semgrep`, `trivy-fs`, `trivy-image`, `zap-staging`.
 
-> **If the gate blocks on base-image CVEs** (findings like `CVE-… in libssl`), that's **Decision D1**, not a pipeline bug. Record which CVEs blocked it and stop for the decision.
+> **If the gate blocks on base-image CVEs**, check where they are first. In Node images they're usually in the bundled npm
+> (`brace-expansion`, `picomatch`, `pacote`, `sigstore`, `ip-address`…): removing npm, as above, clears them. Anything left in the
+> OS packages (e.g. `libssl`) is **Decision D1**, not a pipeline bug: record which CVEs blocked it and stop for the decision.
 
 ### 4.3 Secrets path
 
