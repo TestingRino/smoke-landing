@@ -45,5 +45,10 @@ if curl -s --max-time 2 -H 'Metadata-Flavor: Google' http://169.254.169.254/comp
     docker run --rm "$CURL_IMG" -s -f --max-time 5 -H 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/
 fi
 
+# Containers must still be able to resolve names (scanners download rules and vulnerability databases).
+# Retries: a single DNS lookup can time out on a busy VM.
+check "container DNS lookup works (scanners need it)"               open \
+  docker run --rm alpine:3.23.7 sh -c 'for i in 1 2 3; do nslookup -timeout=5 github.com >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1'
+
 if (( fails )); then echo "$fails check(s) FAILED"; exit 1; fi
 echo "All isolation checks passed."
