@@ -1,0 +1,15 @@
+# Scribe (TestingRino/Scribe): test fixtures from the repo's initial import, commit a4d3c35.
+# None of these is a live credential. The gate's own issue for the first one is TestingRino/Scribe#21.
+
+# tests/test_backup_migrations.py:84 is the path-traversal test string "../../etc/passwd".
+a4d3c3553c822b082d3fa14523b2358e29e367a9:tests/test_backup_migrations.py:generic-api-key:84
+
+# tests/test_secret_redaction.py:29 and :30 are made-up values ("abc123def456", "sk-live-9988776655")
+# used to test that error messages are scrubbed of credentials.
+a4d3c3553c822b082d3fa14523b2358e29e367a9:tests/test_secret_redaction.py:generic-api-key:29
+a4d3c3553c822b082d3fa14523b2358e29e367a9:tests/test_secret_redaction.py:generic-api-key:30
+
+# tests/test_secret_redaction.py:10 is a SAM.gov-shaped API key inside a sample error URL.
+# It may once have been a real key. Merge this line only after the SAM.gov key has been rotated,
+# or confirmed never to have been real.
+a4d3c3553c822b082d3fa14523b2358e29e367a9:tests/test_secret_redaction.py:generic-api-key:10
