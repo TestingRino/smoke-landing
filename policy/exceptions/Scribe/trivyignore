@@ -1,0 +1,6 @@
+# Scribe (TestingRino/Scribe): Tesseract OCR CVEs with no upstream fix (gate issues
+# TestingRino/Scribe#14 and #53). Both need a crafted .traineddata language file to exploit.
+# Scribe loads only the English language data installed in its image; users cannot supply one.
+# Time-boxed: revisit when Tesseract ships a fix, or drop OCR from the image.
+CVE-2026-73066 exp:2027-02-18   # tesseract: heap out-of-bounds write via crafted .traineddata
+CVE-2026-88047 exp:2027-02-18   # tesseract: stack buffer overflow via crafted .traineddata
