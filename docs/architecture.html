@@ -89,7 +89,7 @@ th { font: 500 11px var(--mono); letter-spacing: .06em; text-transform: uppercas
   <figure>
     <div class="legend" aria-hidden="true">
       <span><i class="sw"></i>Live on <code>main</code></span>
-      <span><i class="sw dash"></i>Built on <code>devsecops-pipeline</code>, not merged or run yet</span>
+      <span><i class="sw dash"></i>Added in phase 2 (merged to <code>main</code>, PR #6)</span>
       <span><i class="sw acc"></i>The only path into the boundary</span>
     </div>
     <div class="scroll">
@@ -260,13 +260,13 @@ th { font: 500 11px var(--mono); letter-spacing: .06em; text-transform: uppercas
         <thead><tr><th>Component</th><th>Runs on</th><th>Status</th></tr></thead>
         <tbody>
           <tr><td>Poller, dispatch, gate scans, staging registry</td><td>GitHub Actions + VM runner</td><td><span class="pill live">live on main</span></td></tr>
-          <tr><td>Cloud Run staging deploy with Secret Manager keys</td><td>Google Cloud</td><td><span class="pill wip">built · needs merge to main</span></td></tr>
-          <tr><td>Block all critical/high, GitHub issue filing</td><td>VM runner</td><td><span class="pill wip">built · needs merge to main</span></td></tr>
+          <tr><td>Cloud Run staging deploy with Secret Manager keys</td><td>Google Cloud</td><td><span class="pill live">live on main</span></td></tr>
+          <tr><td>Block all critical/high, GitHub issue filing</td><td>VM runner</td><td><span class="pill live">live on main</span></td></tr>
           <tr><td>KMS signing key</td><td>Google Cloud</td><td><span class="pill live">created · public key pinned</span></td></tr>
-          <tr><td>Signing, attestations, release workflow</td><td>VM runner + Google Cloud</td><td><span class="pill wip">built · needs merge to main</span></td></tr>
-          <tr><td>DefectDojo, IAP team access, backups</td><td>VM</td><td><span class="pill wip">built · setup on VM pending</span></td></tr>
-          <tr><td>GitLab import kit, podman signature policy</td><td>Boundary</td><td><span class="pill wip">built · hand to GitLab team</span></td></tr>
-          <tr><td>Infisical</td><td>VM</td><td><span class="pill gone">retired · remove from VM</span></td></tr>
+          <tr><td>Signing, attestations, release workflow</td><td>VM runner + Google Cloud</td><td><span class="pill live">live on main</span></td></tr>
+          <tr><td>DefectDojo, IAP team access, backups</td><td>VM</td><td><span class="pill live">merged · confirm with status.sh</span></td></tr>
+          <tr><td>GitLab import kit, podman signature policy</td><td>Boundary</td><td><span class="pill wip">merged · with GitLab team</span></td></tr>
+          <tr><td>Infisical</td><td>VM</td><td><span class="pill gone">retired · confirm removed</span></td></tr>
         </tbody>
       </table>
     </div>
